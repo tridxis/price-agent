@@ -3,6 +3,7 @@ import { ChatOpenAI } from '@langchain/openai';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { PriceDataService } from './price-data.service';
 import { CoinListService } from './coin-list.service';
+import { CryptoPrice } from './price-data.service';
 
 @Injectable()
 export class CryptoService {
@@ -28,12 +29,13 @@ export class CryptoService {
       You are a helpful cryptocurrency expert. Use the following price data to answer the user's question.
       Available cryptocurrencies: {symbols}
       
-      Current prices:
+      Current prices from multiple exchanges:
       {context}
       
       Question: {question}
       
-      Please provide a clear and concise answer based on the available data.
+      Please provide a clear and concise answer based on the available data. Always mention price differences between exchanges if they exist.
+      For significant price differences (>1%), suggest possible reasons for the disparity.
     `);
   }
 
@@ -54,12 +56,7 @@ export class CryptoService {
         symbols.map((symbol) => this.priceDataService.getPriceData(symbol)),
       );
 
-      const context = priceData
-        .map(
-          (data) =>
-            `${data.symbol}: $${data.price} (Updated: ${new Date(data.timestamp * 1000).toISOString()})`,
-        )
-        .join('\n');
+      const context = this.formatPriceResponse(priceData);
 
       const allSymbols = this.coinListService
         .getSupportedCoins()
@@ -97,5 +94,17 @@ export class CryptoService {
     }
 
     return Array.from(foundCoins);
+  }
+
+  private formatPriceResponse(priceData: CryptoPrice[]): string {
+    return priceData
+      .map((data) => {
+        const priceList = data.prices
+          .map((p) => `${p.exchange}: $${p.price.toLocaleString()}`)
+          .join('\n  ');
+
+        return `${data.symbol}:\n  ${priceList}\n  Average: $${data.averagePrice.toLocaleString()}`;
+      })
+      .join('\n\n');
   }
 }
