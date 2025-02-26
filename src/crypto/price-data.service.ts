@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { CacheService } from './cache.service';
 
 interface ExchangePrice {
   exchange: string;
@@ -21,40 +22,59 @@ export class PriceDataService {
   private readonly BYBIT_API = 'https://api.bybit.com/v5/market';
   private readonly OKX_API = 'https://www.okx.com/api/v5/market';
 
-  constructor(private readonly httpService: HttpService) {}
+  constructor(
+    private readonly httpService: HttpService,
+    private readonly cacheService: CacheService,
+  ) {}
 
   async getPriceData(symbol: string): Promise<CryptoPrice> {
-    try {
-      const [binancePrice, bybitPrice, okxPrice] = await Promise.all([
-        this.getBinancePrice(symbol),
-        this.getBybitPrice(symbol),
-        this.getOKXPrice(symbol),
-      ]);
+    const upperSymbol = symbol.toUpperCase();
 
-      const prices: ExchangePrice[] = [
-        binancePrice,
-        bybitPrice,
-        okxPrice,
-      ].filter((price): price is ExchangePrice => price !== null);
-
-      if (prices.length === 0) {
-        throw new Error(`No price data available for ${symbol}`);
-      }
-
-      const averagePrice =
-        prices.reduce((sum, price) => sum + price.price, 0) / prices.length;
-
-      return {
-        symbol: symbol.toUpperCase(),
-        prices,
-        averagePrice,
-      };
-    } catch (error) {
-      this.logger.error(
-        `Failed to fetch price data for ${symbol}: ${(error as Error).message}`,
-      );
-      throw new Error(`Failed to fetch price data for ${symbol}`);
+    // Check cache first
+    const cached = this.cacheService.get(upperSymbol);
+    if (cached) {
+      return cached;
     }
+
+    // If not in cache, fetch fresh data
+    const result = await this.fetchPriceData(upperSymbol);
+
+    // Store in cache
+    this.cacheService.set(upperSymbol, result);
+
+    return result;
+  }
+
+  private async fetchPriceData(symbol: string): Promise<CryptoPrice> {
+    // Fetch all prices in parallel with timeout
+    const pricePromises = [
+      this.getBinancePrice(symbol),
+      this.getBybitPrice(symbol),
+      this.getOKXPrice(symbol),
+    ];
+
+    const prices = await Promise.allSettled(pricePromises);
+
+    const validPrices = prices
+      .filter(
+        (result): result is PromiseFulfilledResult<ExchangePrice> =>
+          result.status === 'fulfilled' && result.value !== null,
+      )
+      .map((result) => result.value);
+
+    if (validPrices.length === 0) {
+      throw new Error(`No price data available for ${symbol}`);
+    }
+
+    const averagePrice =
+      validPrices.reduce((sum, price) => sum + price.price, 0) /
+      validPrices.length;
+
+    return {
+      symbol,
+      prices: validPrices,
+      averagePrice,
+    };
   }
 
   private async getBinancePrice(symbol: string): Promise<ExchangePrice | null> {
