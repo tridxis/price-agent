@@ -15,12 +15,17 @@ export interface CryptoPrice {
   averagePrice: number;
 }
 
+interface HyperliquidResponse {
+  [key: string]: number;
+}
+
 @Injectable()
 export class PriceDataService {
   private readonly logger = new Logger(PriceDataService.name);
   private readonly BINANCE_API = 'https://api.binance.com/api/v3';
   private readonly BYBIT_API = 'https://api.bybit.com/v5/market';
   private readonly OKX_API = 'https://www.okx.com/api/v5/market';
+  private readonly HYPERLIQUID_API = 'https://api.hyperliquid.xyz/info';
 
   constructor(
     private readonly httpService: HttpService,
@@ -46,11 +51,11 @@ export class PriceDataService {
   }
 
   private async fetchPriceData(symbol: string): Promise<CryptoPrice> {
-    // Fetch all prices in parallel with timeout
     const pricePromises = [
       this.getBinancePrice(symbol),
       this.getBybitPrice(symbol),
       this.getOKXPrice(symbol),
+      this.getHyperliquidPrice(symbol),
     ];
 
     const prices = await Promise.allSettled(pricePromises);
@@ -132,6 +137,38 @@ export class PriceDataService {
       };
     } catch (error) {
       this.logger.warn(`OKX price fetch failed for ${symbol}`);
+      return null;
+    }
+  }
+
+  private async getHyperliquidPrice(
+    symbol: string,
+  ): Promise<ExchangePrice | null> {
+    try {
+      const { data } = await firstValueFrom(
+        this.httpService.post<HyperliquidResponse>(
+          this.HYPERLIQUID_API,
+          { type: 'allMids' },
+          {
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      );
+
+      const price = data[symbol];
+
+      if (!price) {
+        return null;
+      }
+
+      return {
+        exchange: 'Hyperliquid',
+        price,
+        timestamp: Date.now(),
+      };
+    } catch (error) {
+      console.log(error);
+      this.logger.warn(`Hyperliquid price fetch failed for ${symbol}`);
       return null;
     }
   }
