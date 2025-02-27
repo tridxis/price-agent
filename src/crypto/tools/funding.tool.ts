@@ -21,19 +21,27 @@ interface BinanceFundingResponse {
 }
 
 interface BybitFundingResponse {
+  retCode: number;
+  retMsg: string;
   result: {
+    category: string;
     list: [
       {
+        symbol: string;
         fundingRate: string;
+        fundingRateTimestamp: string;
       },
     ];
   };
 }
 
 interface OKXFundingResponse {
+  code: string;
   data: [
     {
       fundingRate: string;
+      fundingTime: string;
+      instId: string;
     },
   ];
 }
@@ -43,7 +51,7 @@ export class FundingTool {
   private readonly logger = new Logger(FundingTool.name);
   private readonly BINANCE_FUTURES_API = 'https://fapi.binance.com/fapi/v1';
   private readonly BYBIT_API = 'https://api.bybit.com/v5/market';
-  private readonly OKX_API = 'https://www.okx.com/api/v5/market';
+  private readonly OKX_API = 'https://www.okx.com/api/v5';
 
   constructor(
     private readonly httpService: HttpService,
@@ -119,14 +127,21 @@ export class FundingTool {
     try {
       const { data } = await firstValueFrom(
         this.httpService.get<BybitFundingResponse>(
-          `${this.BYBIT_API}/tickers?category=linear&symbol=${symbol}USDT`,
+          `${this.BYBIT_API}/funding/history?category=linear&symbol=${symbol}USDT&limit=1`,
         ),
       );
+
+      if (data.retCode !== 0 || !data.result.list.length) {
+        this.logger.warn(
+          `Bybit funding fetch failed for ${symbol}: ${data.retMsg}`,
+        );
+        return null;
+      }
 
       return {
         exchange: 'Bybit',
         fundingRate: parseFloat(data.result.list[0].fundingRate) * 100,
-        timestamp: Date.now(),
+        timestamp: parseInt(data.result.list[0].fundingRateTimestamp),
       };
     } catch (error) {
       this.logger.warn(`Bybit funding fetch failed for ${symbol}`);
@@ -138,7 +153,7 @@ export class FundingTool {
     try {
       const { data } = await firstValueFrom(
         this.httpService.get<OKXFundingResponse>(
-          `${this.OKX_API}/funding-rate?instId=${symbol}-USDT-SWAP`,
+          `${this.OKX_API}/public/funding-rate?instId=${symbol}-USDT-SWAP`,
         ),
       );
 

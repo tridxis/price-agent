@@ -35,9 +35,9 @@ export class CryptoService {
 
     this.llm = new ChatOpenAI({
       openAIApiKey: process.env.OPENAI_API_KEY,
-      modelName: 'gpt-3.5-turbo', // Using a faster model
-      temperature: 0.3, // Lower temperature for more consistent responses
-      maxTokens: 150, // Limit response length
+      modelName: 'gpt-3.5-turbo',
+      temperature: 0.3,
+      maxTokens: 150,
     });
 
     this.promptTemplate = PromptTemplate.fromTemplate(`
@@ -49,7 +49,13 @@ export class CryptoService {
       
       Question: {question}
       
-      Please provide a clear and concise answer based on the available data. If asked about funding rates, explain whether they are positive (longs pay shorts) or negative (shorts pay longs).
+      Please provide a clear and concise answer based on the available data. 
+      For funding rates:
+      - Positive rates mean longs pay shorts
+      - Negative rates mean shorts pay longs
+      - When comparing rates, consider the average rate across exchanges
+      - Higher funding rates indicate stronger bullish sentiment
+      - Lower/negative rates indicate stronger bearish sentiment
     `);
   }
 
@@ -145,13 +151,37 @@ export class CryptoService {
       }
     }
 
-    // If asking about funding rates in general and no specific coins mentioned,
-    // return top traded coins
+    // If asking about highest/lowest funding rates, return top traded coins
+    if (foundCoins.size === 0 && this.isComparingFundingRates(question)) {
+      // Return top traded coins for comparison
+      return ['btc', 'eth', 'sol', 'bnb', 'avax'];
+    }
+
+    // If asking about funding rates in general and no specific coins mentioned
     if (foundCoins.size === 0 && this.checkIfNeedsFunding(question)) {
-      return ['btc', 'eth']; // Default to major cryptocurrencies
+      return ['btc', 'eth'];
     }
 
     return Array.from(foundCoins);
+  }
+
+  private isComparingFundingRates(question: string): boolean {
+    const compareKeywords = [
+      'highest',
+      'lowest',
+      'best',
+      'worst',
+      'most',
+      'least',
+      'compare',
+      'which',
+      'what',
+    ];
+    const questionLower = question.toLowerCase();
+    return (
+      this.checkIfNeedsFunding(question) &&
+      compareKeywords.some((keyword) => questionLower.includes(keyword))
+    );
   }
 
   private formatResponse(data: CryptoData[]): string {
@@ -214,7 +244,6 @@ export class CryptoService {
   private getAvailableCoinsMessage(): string {
     const availableCoins = this.coinListService
       .getSupportedCoins()
-      .slice(0, 5)
       .map((coin) => `${coin.symbol.toUpperCase()}`)
       .join(', ');
     return `Available cryptocurrencies: ${availableCoins}, and more. Please specify one.`;
