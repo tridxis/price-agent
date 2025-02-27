@@ -1,15 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
-import { CacheService } from './cache.service';
+import { CacheService } from '../cache.service';
 
-interface ExchangePrice {
+export interface ExchangePrice {
   exchange: string;
   price: number;
   timestamp: number;
 }
 
-export interface CryptoPrice {
+export interface PriceData {
   symbol: string;
   prices: ExchangePrice[];
   averagePrice: number;
@@ -20,8 +20,8 @@ interface HyperliquidResponse {
 }
 
 @Injectable()
-export class PriceDataService {
-  private readonly logger = new Logger(PriceDataService.name);
+export class PriceTool {
+  private readonly logger = new Logger(PriceTool.name);
   private readonly BINANCE_API = 'https://api.binance.com/api/v3';
   private readonly BYBIT_API = 'https://api.bybit.com/v5/market';
   private readonly OKX_API = 'https://www.okx.com/api/v5/market';
@@ -32,25 +32,18 @@ export class PriceDataService {
     private readonly cacheService: CacheService,
   ) {}
 
-  async getPriceData(symbol: string): Promise<CryptoPrice> {
+  async getPrices(symbol: string): Promise<PriceData> {
     const upperSymbol = symbol.toUpperCase();
+    const cacheKey = `price_${upperSymbol}`;
+    const cached = this.cacheService.get(cacheKey);
+    if (cached) return cached as PriceData;
 
-    // Check cache first
-    const cached = this.cacheService.get(upperSymbol);
-    if (cached) {
-      return cached;
-    }
-
-    // If not in cache, fetch fresh data
-    const result = await this.fetchPriceData(upperSymbol);
-
-    // Store in cache
-    this.cacheService.set(upperSymbol, result);
-
+    const result = await this.fetchPrices(upperSymbol);
+    this.cacheService.set(cacheKey, result);
     return result;
   }
 
-  private async fetchPriceData(symbol: string): Promise<CryptoPrice> {
+  private async fetchPrices(symbol: string): Promise<PriceData> {
     const pricePromises = [
       this.getBinancePrice(symbol),
       this.getBybitPrice(symbol),
@@ -86,7 +79,7 @@ export class PriceDataService {
     try {
       const { data } = await firstValueFrom(
         this.httpService.get<{ price: string }>(
-          `${this.BINANCE_API}/ticker/price?symbol=${symbol.toUpperCase()}USDT`,
+          `${this.BINANCE_API}/ticker/price?symbol=${symbol}USDT`,
         ),
       );
 
@@ -106,9 +99,7 @@ export class PriceDataService {
       const { data } = await firstValueFrom(
         this.httpService.get<{
           result: { list: [{ lastPrice: string }] };
-        }>(
-          `${this.BYBIT_API}/tickers?category=spot&symbol=${symbol.toUpperCase()}USDT`,
-        ),
+        }>(`${this.BYBIT_API}/tickers?category=spot&symbol=${symbol}USDT`),
       );
 
       return {
@@ -127,7 +118,7 @@ export class PriceDataService {
       const { data } = await firstValueFrom(
         this.httpService.get<{
           data: [{ last: string }];
-        }>(`${this.OKX_API}/ticker?instId=${symbol.toUpperCase()}-USDT`),
+        }>(`${this.OKX_API}/ticker?instId=${symbol}-USDT`),
       );
 
       return {
@@ -156,10 +147,7 @@ export class PriceDataService {
       );
 
       const price = data[symbol];
-
-      if (!price) {
-        return null;
-      }
+      if (!price) return null;
 
       return {
         exchange: 'Hyperliquid',
@@ -167,7 +155,6 @@ export class PriceDataService {
         timestamp: Date.now(),
       };
     } catch (error) {
-      console.log(error);
       this.logger.warn(`Hyperliquid price fetch failed for ${symbol}`);
       return null;
     }

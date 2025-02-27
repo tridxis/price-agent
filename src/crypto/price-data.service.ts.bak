@@ -1,0 +1,245 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
+import { CacheService } from './cache.service';
+
+interface ExchangePrice {
+  exchange: string;
+  price: number;
+  timestamp: number;
+  fundingRate?: number;
+}
+
+export interface CryptoPrice {
+  symbol: string;
+  prices: ExchangePrice[];
+  averagePrice: number;
+}
+
+interface HyperliquidResponse {
+  [key: string]: number;
+}
+
+interface BinanceFundingResponse {
+  symbol: string;
+  markPrice: string;
+  lastFundingRate: string;
+}
+
+interface BybitFundingResponse {
+  result: {
+    list: [
+      {
+        fundingRate: string;
+        symbol: string;
+      },
+    ];
+  };
+}
+
+interface OKXFundingResponse {
+  data: [
+    {
+      fundingRate: string;
+      instId: string;
+    },
+  ];
+}
+
+@Injectable()
+export class PriceDataService {
+  private readonly logger = new Logger(PriceDataService.name);
+  private readonly BINANCE_API = 'https://api.binance.com/api/v3';
+  private readonly BYBIT_API = 'https://api.bybit.com/v5/market';
+  private readonly OKX_API = 'https://www.okx.com/api/v5/market';
+  private readonly HYPERLIQUID_API = 'https://api.hyperliquid.xyz/info';
+  private readonly BINANCE_FUTURES_API = 'https://fapi.binance.com/fapi/v1';
+
+  constructor(
+    private readonly httpService: HttpService,
+    private readonly cacheService: CacheService,
+  ) {}
+
+  async getPriceData(symbol: string): Promise<CryptoPrice> {
+    const upperSymbol = symbol.toUpperCase();
+
+    // Check cache first
+    const cached = this.cacheService.get(upperSymbol);
+    if (cached) {
+      return cached;
+    }
+
+    // If not in cache, fetch fresh data
+    const result = await this.fetchPriceData(upperSymbol);
+
+    // Store in cache
+    this.cacheService.set(upperSymbol, result);
+
+    return result;
+  }
+
+  private async fetchPriceData(symbol: string): Promise<CryptoPrice> {
+    const pricePromises = [
+      this.getBinancePrice(symbol),
+      this.getBybitPrice(symbol),
+      this.getOKXPrice(symbol),
+      this.getHyperliquidPrice(symbol),
+    ];
+
+    const prices = await Promise.allSettled(pricePromises);
+
+    const validPrices = prices
+      .filter(
+        (result): result is PromiseFulfilledResult<ExchangePrice> =>
+          result.status === 'fulfilled' && result.value !== null,
+      )
+      .map((result) => result.value);
+
+    if (validPrices.length === 0) {
+      throw new Error(`No price data available for ${symbol}`);
+    }
+
+    const averagePrice =
+      validPrices.reduce((sum, price) => sum + price.price, 0) /
+      validPrices.length;
+
+    return {
+      symbol,
+      prices: validPrices,
+      averagePrice,
+    };
+  }
+
+  private async getBinancePrice(symbol: string): Promise<ExchangePrice | null> {
+    try {
+      const [spotPrice, fundingData] = await Promise.all([
+        firstValueFrom(
+          this.httpService.get<{ price: string }>(
+            `${this.BINANCE_API}/ticker/price?symbol=${symbol.toUpperCase()}USDT`,
+          ),
+        ),
+        firstValueFrom(
+          this.httpService.get<BinanceFundingResponse>(
+            `${this.BINANCE_FUTURES_API}/premiumIndex?symbol=${symbol.toUpperCase()}USDT`,
+          ),
+        ),
+      ]);
+
+      return {
+        exchange: 'Binance',
+        price: parseFloat(spotPrice.data.price),
+        fundingRate: parseFloat(fundingData.data.lastFundingRate) * 100,
+        timestamp: Date.now(),
+      };
+    } catch (error) {
+      this.logger.warn(`Binance data fetch failed for ${symbol}`);
+      return null;
+    }
+  }
+
+  private async getBybitPrice(symbol: string): Promise<ExchangePrice | null> {
+    try {
+      const [spotPrice, fundingData] = await Promise.all([
+        firstValueFrom(
+          this.httpService.get<{
+            result: { list: [{ lastPrice: string }] };
+          }>(
+            `${this.BYBIT_API}/tickers?category=spot&symbol=${symbol.toUpperCase()}USDT`,
+          ),
+        ),
+        firstValueFrom(
+          this.httpService.get<BybitFundingResponse>(
+            `${this.BYBIT_API}/tickers?category=linear&symbol=${symbol.toUpperCase()}USDT`,
+          ),
+        ),
+      ]);
+
+      return {
+        exchange: 'Bybit',
+        price: parseFloat(spotPrice.data.result.list[0].lastPrice),
+        fundingRate:
+          parseFloat(fundingData.data.result.list[0].fundingRate) * 100,
+        timestamp: Date.now(),
+      };
+    } catch (error) {
+      this.logger.warn(`Bybit data fetch failed for ${symbol}`);
+      return null;
+    }
+  }
+
+  private async getOKXPrice(symbol: string): Promise<ExchangePrice | null> {
+    try {
+      const [spotPrice, fundingData] = await Promise.all([
+        firstValueFrom(
+          this.httpService.get<{
+            data: [{ last: string }];
+          }>(`${this.OKX_API}/ticker?instId=${symbol.toUpperCase()}-USDT`),
+        ),
+        firstValueFrom(
+          this.httpService.get<OKXFundingResponse>(
+            `${this.OKX_API}/funding-rate?instId=${symbol.toUpperCase()}-USDT-SWAP`,
+          ),
+        ),
+      ]);
+
+      return {
+        exchange: 'OKX',
+        price: parseFloat(spotPrice.data.data[0].last),
+        fundingRate: parseFloat(fundingData.data.data[0].fundingRate) * 100,
+        timestamp: Date.now(),
+      };
+    } catch (error) {
+      this.logger.warn(`OKX data fetch failed for ${symbol}`);
+      return null;
+    }
+  }
+
+  private async getHyperliquidPrice(
+    symbol: string,
+  ): Promise<ExchangePrice | null> {
+    try {
+      const { data } = await firstValueFrom(
+        this.httpService.post<HyperliquidResponse>(
+          this.HYPERLIQUID_API,
+          { type: 'allMids' },
+          {
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      );
+
+      const price = data[symbol];
+
+      if (!price) {
+        return null;
+      }
+
+      return {
+        exchange: 'Hyperliquid',
+        price,
+        timestamp: Date.now(),
+      };
+    } catch (error) {
+      console.log(error);
+      this.logger.warn(`Hyperliquid price fetch failed for ${symbol}`);
+      return null;
+    }
+  }
+
+  private formatPriceResponse(priceData: CryptoPrice[]): string {
+    return priceData
+      .map((data) => {
+        const priceList = data.prices
+          .map((p) => {
+            const fundingInfo = p.fundingRate
+              ? ` (Funding: ${p.fundingRate.toFixed(4)}%)`
+              : '';
+            return `${p.exchange}: $${p.price.toLocaleString()}${fundingInfo}`;
+          })
+          .join('\n  ');
+
+        return `${data.symbol}:\n  ${priceList}\n  Average: $${data.averagePrice.toLocaleString()}`;
+      })
+      .join('\n\n');
+  }
+}

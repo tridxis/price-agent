@@ -1,20 +1,23 @@
 import { Injectable } from '@nestjs/common';
-import { CryptoPrice } from './price-data.service';
+import { PriceData } from './tools/price.tool';
+import { FundingData } from './tools/funding.tool';
 
 @Injectable()
 export class CacheService {
-  private priceCache: Map<string, { data: CryptoPrice; timestamp: number }> =
-    new Map();
+  private priceCache: Map<
+    string,
+    { data: PriceData | FundingData; timestamp: number }
+  > = new Map();
   private readonly CACHE_TTL = 10000; // 10 seconds cache
 
-  set(key: string, value: CryptoPrice): void {
+  set(key: string, value: PriceData | FundingData): void {
     this.priceCache.set(key, {
       data: value,
       timestamp: Date.now(),
     });
   }
 
-  get(key: string): CryptoPrice | null {
+  get(key: string): PriceData | FundingData | null {
     const cached = this.priceCache.get(key);
     if (!cached) return null;
 

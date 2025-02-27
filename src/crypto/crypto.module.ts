@@ -3,9 +3,12 @@ import { HttpModule } from '@nestjs/axios';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CryptoController } from './crypto.controller';
 import { CryptoService } from './crypto.service';
-import { PriceDataService } from './price-data.service';
+// import { PriceDataService } from './price-data.service';
 import { CoinListService } from './coin-list.service';
 import { CacheService } from './cache.service';
+import { PriceTool } from './tools/price.tool';
+import { CryptoSupervisor } from './crypto.supervisor';
+import { FundingTool } from './tools/funding.tool';
 
 @Module({
   imports: [
@@ -16,6 +19,13 @@ import { CacheService } from './cache.service';
     ScheduleModule.forRoot(),
   ],
   controllers: [CryptoController],
-  providers: [CryptoService, PriceDataService, CoinListService, CacheService],
+  providers: [
+    CryptoService,
+    CoinListService,
+    CacheService,
+    PriceTool,
+    FundingTool,
+    CryptoSupervisor,
+  ],
 })
 export class CryptoModule {}
