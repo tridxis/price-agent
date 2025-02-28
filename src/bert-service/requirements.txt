@@ -1,0 +1,6 @@
+fastapi==0.104.1
+transformers==4.35.2
+torch==2.1.1
+uvicorn==0.24.0
+pydantic==2.5.2
+sentencepiece==0.1.99  # Required for some models 

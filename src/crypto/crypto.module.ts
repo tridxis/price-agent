@@ -9,6 +9,7 @@ import { CacheService } from './cache.service';
 import { PriceTool } from './tools/price.tool';
 import { CryptoSupervisor } from './crypto.supervisor';
 import { FundingTool } from './tools/funding.tool';
+import { NLPTool } from './tools/nlp.tool';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { FundingTool } from './tools/funding.tool';
     PriceTool,
     FundingTool,
     CryptoSupervisor,
+    NLPTool,
   ],
 })
 export class CryptoModule {}

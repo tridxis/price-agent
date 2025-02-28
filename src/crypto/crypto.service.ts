@@ -5,6 +5,7 @@ import { CoinListService } from './coin-list.service';
 import { CryptoSupervisor } from './crypto.supervisor';
 import { PriceData } from './tools/price.tool';
 import { FundingData } from './tools/funding.tool';
+import { NLPTool, QuestionIntent } from './tools/nlp.tool';
 
 interface AIResponse {
   response: string;
@@ -28,6 +29,7 @@ export class CryptoService {
   constructor(
     private readonly cryptoSupervisor: CryptoSupervisor,
     private readonly coinListService: CoinListService,
+    private readonly nlpTool: NLPTool,
   ) {
     if (!process.env.OPENAI_API_KEY) {
       throw new Error('OPENAI_API_KEY environment variable is not set');
@@ -61,14 +63,16 @@ export class CryptoService {
 
   async processQuestion(question: string): Promise<string> {
     try {
-      const symbols = this.extractCryptoSymbols(question);
+      const intent = await this.nlpTool.analyzeQuestion(question);
+      const symbols = await this.getSymbolsFromIntent(intent);
+
       if (symbols.length === 0) return this.getAvailableCoinsMessage();
 
-      const cacheKey = `${question}_${symbols.sort().join('_')}`;
+      const cacheKey = this.generateCacheKey(question, symbols, intent);
       const cached = this.getCachedResponse(cacheKey);
       if (cached) return cached;
 
-      const data = await this.getRequiredData(question, symbols);
+      const data = await this.getRequiredData(intent, symbols);
       const response = await this.generateResponse(question, symbols, data);
 
       this.cacheResponse(cacheKey, response);
@@ -81,10 +85,10 @@ export class CryptoService {
   }
 
   private async getRequiredData(
-    question: string,
+    intent: QuestionIntent,
     symbols: string[],
   ): Promise<CryptoData[]> {
-    const needsFunding = this.checkIfNeedsFunding(question);
+    const needsFunding = this.checkIfNeedsFunding(intent.type);
 
     if (needsFunding) {
       const combinedData = await Promise.all(
@@ -105,7 +109,7 @@ export class CryptoService {
     return priceData;
   }
 
-  private checkIfNeedsFunding(question: string): boolean {
+  private checkIfNeedsFunding(questionType: string): boolean {
     const fundingKeywords = [
       'funding',
       'rate',
@@ -115,7 +119,7 @@ export class CryptoService {
       'long',
       'short',
     ];
-    const questionLower = question.toLowerCase();
+    const questionLower = questionType.toLowerCase();
     return fundingKeywords.some((keyword) => questionLower.includes(keyword));
   }
 
@@ -139,49 +143,31 @@ export class CryptoService {
     });
   }
 
-  private extractCryptoSymbols(question: string): string[] {
-    const words = question.toLowerCase().split(/\s+/);
-    const foundCoins = new Set<string>();
-
-    // Check for specific coins first
-    for (const word of words) {
-      const coinId = this.coinListService.findCoinId(word);
-      if (coinId) {
-        foundCoins.add(coinId);
-      }
+  private getSymbolsFromIntent(intent: QuestionIntent): string[] {
+    // If specific targets are identified, use them
+    if (intent.targets.length > 0) {
+      return intent.targets;
     }
 
-    // If asking about highest/lowest funding rates, return top traded coins
-    if (foundCoins.size === 0 && this.isComparingFundingRates(question)) {
-      // Return top traded coins for comparison
+    // For comparison questions without specific targets
+    if (intent.type === 'comparison') {
       return ['btc', 'eth', 'sol', 'bnb', 'avax'];
     }
 
-    // If asking about funding rates in general and no specific coins mentioned
-    if (foundCoins.size === 0 && this.checkIfNeedsFunding(question)) {
+    // For general questions about funding or price
+    if (intent.type === 'funding' || intent.type === 'price') {
       return ['btc', 'eth'];
     }
 
-    return Array.from(foundCoins);
+    return [];
   }
 
-  private isComparingFundingRates(question: string): boolean {
-    const compareKeywords = [
-      'highest',
-      'lowest',
-      'best',
-      'worst',
-      'most',
-      'least',
-      'compare',
-      'which',
-      'what',
-    ];
-    const questionLower = question.toLowerCase();
-    return (
-      this.checkIfNeedsFunding(question) &&
-      compareKeywords.some((keyword) => questionLower.includes(keyword))
-    );
+  private generateCacheKey(
+    question: string,
+    symbols: string[],
+    intent: QuestionIntent,
+  ): string {
+    return `${question}_${symbols.sort().join('_')}_${intent.type}`;
   }
 
   private formatResponse(data: CryptoData[]): string {
