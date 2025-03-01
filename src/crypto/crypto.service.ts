@@ -6,6 +6,7 @@ import { CryptoSupervisor } from './crypto.supervisor';
 import { PriceData } from './tools/price.tool';
 import { FundingData } from './tools/funding.tool';
 import { NLPTool, QuestionIntent } from './tools/nlp.tool';
+import { CacheService } from './cache.service';
 
 interface AIResponse {
   response: string;
@@ -30,6 +31,7 @@ export class CryptoService {
     private readonly cryptoSupervisor: CryptoSupervisor,
     private readonly coinListService: CoinListService,
     private readonly nlpTool: NLPTool,
+    private readonly cacheService: CacheService,
   ) {
     if (!process.env.OPENAI_API_KEY) {
       throw new Error('OPENAI_API_KEY environment variable is not set');
@@ -64,8 +66,8 @@ export class CryptoService {
   async processQuestion(question: string): Promise<string> {
     try {
       const intent = await this.nlpTool.analyzeQuestion(question);
-      const symbols = await this.getSymbolsFromIntent(intent);
-
+      const symbols = this.getSymbolsFromIntent(intent);
+      console.log('Symbols:', symbols);
       if (symbols.length === 0) return this.getAvailableCoinsMessage();
 
       const cacheKey = this.generateCacheKey(question, symbols, intent);
@@ -88,25 +90,45 @@ export class CryptoService {
     intent: QuestionIntent,
     symbols: string[],
   ): Promise<CryptoData[]> {
-    const needsFunding = this.checkIfNeedsFunding(intent.type);
+    // Trigger batch update if needed
+    await this.cacheService.updateBatchCache();
 
+    const needsFunding = this.checkIfNeedsFunding(intent.type);
     if (needsFunding) {
       const combinedData = await Promise.all(
         symbols.map(async (symbol) => {
-          const data = await this.cryptoSupervisor.getPriceAndFunding(symbol);
-          return { type: 'combined', data } as const;
+          try {
+            const data = await this.cryptoSupervisor.getPriceAndFunding(symbol);
+            return { type: 'combined', data } as const;
+          } catch (error) {
+            this.logger.debug(`Skipping ${symbol}: ${error.message}`);
+            return null;
+          }
         }),
       );
-      return combinedData;
+
+      // Filter out null values from failed requests
+      return combinedData.filter(
+        (data): data is NonNullable<typeof data> => data !== null,
+      );
     }
 
     const priceData = await Promise.all(
       symbols.map(async (symbol) => {
-        const data = await this.cryptoSupervisor.getPrice(symbol);
-        return { type: 'price', data } as const;
+        try {
+          const data = await this.cryptoSupervisor.getPrice(symbol);
+          return { type: 'price', data } as const;
+        } catch (error) {
+          this.logger.debug(`Skipping ${symbol}: ${error.message}`);
+          return null;
+        }
       }),
     );
-    return priceData;
+
+    // Filter out null values from failed requests
+    return priceData.filter(
+      (data): data is NonNullable<typeof data> => data !== null,
+    );
   }
 
   private checkIfNeedsFunding(questionType: string): boolean {
@@ -149,14 +171,15 @@ export class CryptoService {
       return intent.targets;
     }
 
-    // For comparison questions without specific targets
-    if (intent.type === 'comparison') {
-      return ['btc', 'eth', 'sol', 'bnb', 'avax'];
-    }
-
-    // For general questions about funding or price
-    if (intent.type === 'funding' || intent.type === 'price') {
-      return ['btc', 'eth'];
+    // For comparison or funding/price questions, return all supported coins
+    if (
+      intent.type === 'comparison' ||
+      intent.type === 'funding' ||
+      intent.type === 'price'
+    ) {
+      return this.coinListService
+        .getSupportedCoins()
+        .map((coin) => coin.symbol);
     }
 
     return [];
@@ -171,6 +194,10 @@ export class CryptoService {
   }
 
   private formatResponse(data: CryptoData[]): string {
+    if (data.length === 0) {
+      return 'No data available for the requested symbols. They might not have perpetual contracts.';
+    }
+
     return data
       .map((item) => {
         switch (item.type) {

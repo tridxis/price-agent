@@ -1,14 +1,7 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { firstValueFrom } from 'rxjs';
-
-interface BinanceSymbol {
-  symbol: string;
-  baseAsset: string;
-  quoteAsset: string;
-  status: string;
-}
 
 interface CoinInfo {
   id: string;
@@ -16,14 +9,19 @@ interface CoinInfo {
   name: string;
 }
 
-interface BinanceResponse {
-  symbols: BinanceSymbol[];
+interface HyperliquidMeta {
+  universe: {
+    maxLeverage: string;
+    name: string;
+    szDecimals: number;
+  }[];
 }
 
 @Injectable()
 export class CoinListService implements OnModuleInit {
+  private readonly logger = new Logger(CoinListService.name);
   private supportedCoins: Map<string, CoinInfo> = new Map();
-  private readonly BINANCE_API = 'https://api.binance.com/api/v3';
+  private readonly HYPERLIQUID_API = 'https://api.hyperliquid.xyz/info';
 
   constructor(private readonly httpService: HttpService) {}
 
@@ -34,31 +32,41 @@ export class CoinListService implements OnModuleInit {
   @Cron(CronExpression.EVERY_HOUR)
   async updateCoinList() {
     try {
+      const coins = await this.getHyperliquidCoins();
+      this.supportedCoins.clear();
+
+      for (const coin of coins) {
+        this.supportedCoins.set(coin.symbol, coin);
+      }
+
+      this.logger.log(
+        `Updated coin list. Total coins: ${this.supportedCoins.size}`,
+      );
+    } catch (error) {
+      this.logger.error('Failed to update coin list:', error);
+    }
+  }
+
+  private async getHyperliquidCoins(): Promise<CoinInfo[]> {
+    try {
       const { data } = await firstValueFrom(
-        this.httpService.get<BinanceResponse>(
-          `${this.BINANCE_API}/exchangeInfo`,
+        this.httpService.post<HyperliquidMeta>(
+          this.HYPERLIQUID_API,
+          { type: 'meta' },
+          {
+            headers: { 'Content-Type': 'application/json' },
+          },
         ),
       );
 
-      this.supportedCoins.clear();
-      const usdtPairs = data.symbols.filter(
-        (symbol: BinanceSymbol) =>
-          symbol.quoteAsset === 'USDT' && symbol.status === 'TRADING',
-      );
-
-      for (const pair of usdtPairs) {
-        const coin: CoinInfo = {
-          id: pair.baseAsset.toLowerCase(),
-          symbol: pair.baseAsset.toLowerCase(),
-          name: pair.baseAsset,
-        };
-        this.supportedCoins.set(coin.symbol.toLowerCase(), coin);
-      }
+      return data.universe.map((coin) => ({
+        id: coin.name.toLowerCase(),
+        symbol: coin.name.toLowerCase(),
+        name: coin.name,
+      }));
     } catch (error) {
-      console.error(
-        'Failed to update Binance symbols:',
-        (error as Error).message,
-      );
+      this.logger.error('Failed to fetch Hyperliquid coins:', error);
+      return [];
     }
   }
 

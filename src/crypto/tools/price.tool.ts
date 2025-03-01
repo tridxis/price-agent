@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { CacheService } from '../cache.service';
+import { Cron, CronExpression } from '@nestjs/schedule';
 
 export interface ExchangePrice {
   exchange: string;
@@ -20,121 +21,157 @@ interface HyperliquidResponse {
 }
 
 @Injectable()
-export class PriceTool {
+export class PriceTool implements OnModuleInit {
   private readonly logger = new Logger(PriceTool.name);
-  private readonly BINANCE_API = 'https://api.binance.com/api/v3';
+  private readonly BINANCE_API = 'https://fapi.binance.com/fapi/v1';
   private readonly BYBIT_API = 'https://api.bybit.com/v5/market';
-  private readonly OKX_API = 'https://www.okx.com/api/v5/market';
+  private readonly OKX_API = 'https://www.okx.com/api/v5/public';
   private readonly HYPERLIQUID_API = 'https://api.hyperliquid.xyz/info';
+
+  private pricesMap: Map<string, PriceData> = new Map();
+  private lastUpdate = 0;
+  private readonly UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes for prices
 
   constructor(
     private readonly httpService: HttpService,
     private readonly cacheService: CacheService,
   ) {}
 
-  async getPrices(symbol: string): Promise<PriceData> {
-    const upperSymbol = symbol.toUpperCase();
-    const cacheKey = `price_${upperSymbol}`;
-    const cached = this.cacheService.get(cacheKey);
-    if (cached) return cached as PriceData;
-
-    const result = await this.fetchPrices(upperSymbol);
-    this.cacheService.set(cacheKey, result);
-    return result;
+  async onModuleInit() {
+    await this.updateAllPrices();
   }
 
-  private async fetchPrices(symbol: string): Promise<PriceData> {
-    const pricePromises = [
-      this.getBinancePrice(symbol),
-      this.getBybitPrice(symbol),
-      this.getOKXPrice(symbol),
-      this.getHyperliquidPrice(symbol),
-    ];
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  private async updateAllPrices(): Promise<void> {
+    try {
+      const [binanceData, bybitData, hyperliquidData, okxData] =
+        await Promise.all([
+          this.fetchBinancePrices(),
+          this.fetchBybitPrices(),
+          this.fetchHyperliquidPrices(),
+          this.fetchOKXPrices(),
+        ]);
 
-    const prices = await Promise.allSettled(pricePromises);
+      const timestamp = Date.now();
+      this.pricesMap.clear();
 
-    const validPrices = prices
-      .filter(
-        (result): result is PromiseFulfilledResult<ExchangePrice> =>
-          result.status === 'fulfilled' && result.value !== null,
-      )
-      .map((result) => result.value);
+      // Merge all price data
+      const allSymbols = new Set([
+        ...binanceData.keys(),
+        ...bybitData.keys(),
+        ...hyperliquidData.keys(),
+        ...okxData.keys(),
+      ]);
 
-    if (validPrices.length === 0) {
-      throw new Error(`No price data available for ${symbol}`);
+      for (const symbol of allSymbols) {
+        const prices: ExchangePrice[] = [];
+
+        const binancePrice = binanceData.get(symbol);
+        if (binancePrice)
+          prices.push({ exchange: 'Binance', price: binancePrice, timestamp });
+
+        const bybitPrice = bybitData.get(symbol);
+        if (bybitPrice)
+          prices.push({ exchange: 'Bybit', price: bybitPrice, timestamp });
+
+        const hyperliquidPrice = hyperliquidData.get(symbol);
+        if (hyperliquidPrice)
+          prices.push({
+            exchange: 'Hyperliquid',
+            price: hyperliquidPrice,
+            timestamp,
+          });
+
+        const okxPrice = okxData.get(symbol);
+        if (okxPrice)
+          prices.push({ exchange: 'OKX', price: okxPrice, timestamp });
+
+        if (prices.length > 0) {
+          const averagePrice =
+            prices.reduce((sum, p) => sum + p.price, 0) / prices.length;
+
+          const priceData: PriceData = {
+            symbol,
+            prices,
+            averagePrice,
+          };
+
+          this.pricesMap.set(symbol, priceData);
+          this.cacheService.set(`price_${symbol}`, priceData, 'price');
+        }
+      }
+
+      this.lastUpdate = timestamp;
+      this.logger.debug(`Updated prices for ${this.pricesMap.size} symbols`);
+    } catch (error) {
+      this.logger.error('Failed to update prices:', error);
     }
-
-    const averagePrice =
-      validPrices.reduce((sum, price) => sum + price.price, 0) /
-      validPrices.length;
-
-    return {
-      symbol,
-      prices: validPrices,
-      averagePrice,
-    };
   }
 
-  private async getBinancePrice(symbol: string): Promise<ExchangePrice | null> {
+  private async fetchBinancePrices(): Promise<Map<string, number>> {
     try {
       const { data } = await firstValueFrom(
-        this.httpService.get<{ price: string }>(
-          `${this.BINANCE_API}/ticker/price?symbol=${symbol}USDT`,
+        this.httpService.get<{ symbol: string; markPrice: string }[]>(
+          `${this.BINANCE_API}/premiumIndex`,
         ),
       );
 
-      return {
-        exchange: 'Binance',
-        price: parseFloat(data.price),
-        timestamp: Date.now(),
-      };
+      return new Map(
+        data
+          .filter((item) => item.symbol.endsWith('USDT'))
+          .map((item) => [
+            item.symbol.replace('USDT', ''),
+            parseFloat(item.markPrice),
+          ]),
+      );
     } catch (error) {
-      this.logger.warn(`Binance price fetch failed for ${symbol}`);
-      return null;
+      this.logger.error('Failed to fetch Binance perpetual prices:', error);
+      return new Map();
     }
   }
 
-  private async getBybitPrice(symbol: string): Promise<ExchangePrice | null> {
+  private async fetchBybitPrices(): Promise<Map<string, number>> {
     try {
       const { data } = await firstValueFrom(
         this.httpService.get<{
-          result: { list: [{ lastPrice: string }] };
-        }>(`${this.BYBIT_API}/tickers?category=spot&symbol=${symbol}USDT`),
+          result: { list: { symbol: string; markPrice: string }[] };
+        }>(`${this.BYBIT_API}/tickers?category=linear`),
       );
 
-      return {
-        exchange: 'Bybit',
-        price: parseFloat(data.result.list[0].lastPrice),
-        timestamp: Date.now(),
-      };
+      return new Map(
+        data.result.list
+          .filter((item) => item.symbol.endsWith('USDT'))
+          .map((item) => [
+            item.symbol.replace('USDT', ''),
+            parseFloat(item.markPrice),
+          ]),
+      );
     } catch (error) {
-      this.logger.warn(`Bybit price fetch failed for ${symbol}`);
-      return null;
+      this.logger.error('Failed to fetch Bybit perpetual prices:', error);
+      return new Map();
     }
   }
 
-  private async getOKXPrice(symbol: string): Promise<ExchangePrice | null> {
+  private async fetchOKXPrices(): Promise<Map<string, number>> {
     try {
       const { data } = await firstValueFrom(
         this.httpService.get<{
-          data: [{ last: string }];
-        }>(`${this.OKX_API}/ticker?instId=${symbol}-USDT`),
+          data: { instId: string; markPx: string }[];
+        }>(`${this.OKX_API}/mark-price?instType=SWAP`),
       );
 
-      return {
-        exchange: 'OKX',
-        price: parseFloat(data.data[0].last),
-        timestamp: Date.now(),
-      };
+      return new Map(
+        data.data
+          .filter((item) => item.instId.endsWith('-USDT-SWAP'))
+          .map((item) => [item.instId.split('-')[0], parseFloat(item.markPx)]),
+      );
     } catch (error) {
-      this.logger.warn(`OKX price fetch failed for ${symbol}`);
-      return null;
+      this.logger.error('Failed to fetch OKX perpetual prices:', error);
+      return new Map();
     }
   }
 
-  private async getHyperliquidPrice(
-    symbol: string,
-  ): Promise<ExchangePrice | null> {
+  private async fetchHyperliquidPrices(): Promise<Map<string, number>> {
     try {
       const { data } = await firstValueFrom(
         this.httpService.post<HyperliquidResponse>(
@@ -146,17 +183,34 @@ export class PriceTool {
         ),
       );
 
-      const price = data[symbol];
-      if (!price) return null;
-
-      return {
-        exchange: 'Hyperliquid',
-        price,
-        timestamp: Date.now(),
-      };
+      return new Map(Object.entries(data));
     } catch (error) {
-      this.logger.warn(`Hyperliquid price fetch failed for ${symbol}`);
-      return null;
+      this.logger.error('Failed to fetch Hyperliquid perpetual prices:', error);
+      return new Map();
     }
+  }
+
+  async getPrices(symbol: string): Promise<PriceData> {
+    const upperSymbol = symbol.toUpperCase();
+
+    // Check cache first
+    const cached = this.cacheService.get(`price_${upperSymbol}`, 'price');
+    if (cached) return cached as PriceData;
+
+    // If data is stale, update all prices
+    if (Date.now() - this.lastUpdate > this.UPDATE_INTERVAL) {
+      await this.updateAllPrices();
+    }
+
+    const priceData = this.pricesMap.get(upperSymbol);
+    if (!priceData) {
+      throw new Error(`No price data available for ${upperSymbol}`);
+    }
+
+    return priceData;
+  }
+
+  getAllPrices(): PriceData[] {
+    return Array.from(this.pricesMap.values());
   }
 }
