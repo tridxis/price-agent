@@ -89,46 +89,66 @@ export class CryptoService {
   private async getRequiredData(
     intent: QuestionIntent,
     symbols: string[],
+    retryCount = 0,
   ): Promise<CryptoData[]> {
-    // Trigger batch update if needed
-    await this.cacheService.updateBatchCache();
-
     const needsFunding = this.checkIfNeedsFunding(intent.type);
-    if (needsFunding) {
-      const combinedData = await Promise.all(
-        symbols.map(async (symbol) => {
-          try {
-            const data = await this.cryptoSupervisor.getPriceAndFunding(symbol);
-            return { type: 'combined', data } as const;
-          } catch (error) {
-            this.logger.debug(`Skipping ${symbol}: ${error.message}`);
-            return null;
-          }
-        }),
-      );
+    const maxRetries = 2;
 
-      // Filter out null values from failed requests
-      return combinedData.filter(
-        (data): data is NonNullable<typeof data> => data !== null,
-      );
+    // Get cached data first
+    const results = symbols.map((symbol) => {
+      try {
+        if (needsFunding) {
+          if (intent.type === 'funding') {
+            // Funding-only request
+            const funding = this.cacheService.get(
+              `funding_${symbol}`,
+              'funding',
+            ) as FundingData;
+            if (funding) {
+              return { type: 'funding', data: funding } as const;
+            }
+          } else {
+            // Combined price and funding request
+            const price = this.cacheService.get(
+              `price_${symbol}`,
+              'price',
+            ) as PriceData;
+            const funding = this.cacheService.get(
+              `funding_${symbol}`,
+              'funding',
+            ) as FundingData;
+            if (price && funding) {
+              return { type: 'combined', data: { price, funding } } as const;
+            }
+          }
+        } else {
+          const price = this.cacheService.get(
+            `price_${symbol}`,
+            'price',
+          ) as PriceData;
+          if (price) {
+            return { type: 'price', data: price } as const;
+          }
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    });
+
+    // If we have all data from cache, return it
+    if (!results.includes(null)) {
+      return results.filter((r): r is NonNullable<typeof r> => r !== null);
     }
 
-    const priceData = await Promise.all(
-      symbols.map(async (symbol) => {
-        try {
-          const data = await this.cryptoSupervisor.getPrice(symbol);
-          return { type: 'price', data } as const;
-        } catch (error) {
-          this.logger.debug(`Skipping ${symbol}: ${error.message}`);
-          return null;
-        }
-      }),
-    );
+    // If we've retried too many times, return what we have
+    if (retryCount >= maxRetries) {
+      return results.filter((r): r is NonNullable<typeof r> => r !== null);
+    }
 
-    // Filter out null values from failed requests
-    return priceData.filter(
-      (data): data is NonNullable<typeof data> => data !== null,
-    );
+    // Update missing data and retry
+    await this.cryptoSupervisor.batchUpdateData(symbols);
+    return this.getRequiredData(intent, symbols, retryCount + 1);
   }
 
   private checkIfNeedsFunding(questionType: string): boolean {

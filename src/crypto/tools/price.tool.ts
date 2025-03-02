@@ -195,7 +195,7 @@ export class PriceTool implements OnModuleInit {
 
     // Check cache first
     const cached = this.cacheService.get(`price_${upperSymbol}`, 'price');
-    if (cached) return cached as PriceData;
+    if (cached) return cached as unknown as PriceData;
 
     // If data is stale, update all prices
     if (Date.now() - this.lastUpdate > this.UPDATE_INTERVAL) {
