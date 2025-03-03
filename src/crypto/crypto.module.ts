@@ -10,6 +10,8 @@ import { PriceTool } from './tools/price.tool';
 import { CryptoSupervisor } from './crypto.supervisor';
 import { FundingTool } from './tools/funding.tool';
 import { NLPTool } from './tools/nlp.tool';
+import { HistoricalDataService } from './historical-data.service';
+import { RAGManagerService } from './rag-manager.service';
 
 @Module({
   imports: [
@@ -28,6 +30,8 @@ import { NLPTool } from './tools/nlp.tool';
     FundingTool,
     CryptoSupervisor,
     NLPTool,
+    HistoricalDataService,
+    RAGManagerService,
   ],
 })
 export class CryptoModule {}

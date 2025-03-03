@@ -5,8 +5,8 @@ import { firstValueFrom } from 'rxjs';
 export interface QuestionIntent {
   type: 'price' | 'funding' | 'comparison' | 'trend' | 'unknown';
   targets: string[];
-  action?: 'highest' | 'lowest' | 'compare' | null;
-  timeframe?: 'current' | 'historical' | null;
+  action: 'highest' | 'lowest' | 'compare' | 'up' | 'down' | null;
+  timeframe: 'current' | '1h' | '24h' | '7d';
 }
 
 interface BertResponse {
@@ -23,7 +23,7 @@ export class NLPTool {
   private readonly HUGGINGFACE_API_KEY = process.env.HUGGINGFACE_API_KEY;
 
   constructor(private readonly httpService: HttpService) {
-    console.log(this.BERT_API);
+    // console.log(this.BERT_API);
     if (!this.BERT_API) {
       this.logger.warn(
         'BERT_API_URL not set, falling back to rule-based analysis',
@@ -61,7 +61,7 @@ export class NLPTool {
         ),
       );
 
-      console.log('API Response:', data); // Debug log
+      // console.log('API Response:', data); // Debug log
       return this.mapBertResponseToIntent(data);
     } catch (error) {
       this.logger.warn(
@@ -82,7 +82,7 @@ export class NLPTool {
     const topScore = Math.max(...response.scores);
     const topLabel = response.labels[response.scores.indexOf(topScore)];
 
-    console.log('Top Label:', topLabel, 'Score:', topScore); // Debug log
+    // console.log('Top Label:', topLabel, 'Score:', topScore); // Debug log
 
     switch (topLabel) {
       case 'asking about price':
@@ -108,7 +108,7 @@ export class NLPTool {
         break;
     }
 
-    console.log('Mapped Intent:', intent); // Debug log
+    // console.log('Mapped Intent:', intent); // Debug log
     return intent;
   }
 

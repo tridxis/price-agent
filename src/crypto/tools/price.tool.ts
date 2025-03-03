@@ -8,6 +8,7 @@ export interface ExchangePrice {
   exchange: string;
   price: number;
   timestamp: number;
+  volume?: number;
 }
 
 export interface PriceData {

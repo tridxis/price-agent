@@ -102,7 +102,7 @@ export class FundingTool implements OnModuleInit {
 
     // Check cache first
     const cached = this.cacheService.get(`funding_${upperSymbol}`, 'funding');
-    if (cached) return cached as FundingData;
+    if (cached) return cached as unknown as FundingData;
 
     // If data is stale, update all rates
     if (Date.now() - this.lastUpdate > this.UPDATE_INTERVAL) {

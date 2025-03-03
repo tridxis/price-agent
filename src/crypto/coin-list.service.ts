@@ -18,30 +18,30 @@ interface HyperliquidMeta {
 }
 
 @Injectable()
-export class CoinListService implements OnModuleInit {
+export class CoinListService {
   private readonly logger = new Logger(CoinListService.name);
-  private supportedCoins: Map<string, CoinInfo> = new Map();
-  private readonly HYPERLIQUID_API = 'https://api.hyperliquid.xyz/info';
+  private readonly coins: Map<string, CoinInfo> = new Map();
+  private isInitialized = false;
 
-  constructor(private readonly httpService: HttpService) {}
-
-  async onModuleInit() {
-    await this.updateCoinList();
+  constructor(private readonly httpService: HttpService) {
+    // Initial load
+    void this.updateCoinList().then(() => {
+      this.isInitialized = true;
+      this.logger.log('Coin list initialized successfully');
+    });
   }
 
   @Cron(CronExpression.EVERY_HOUR)
-  async updateCoinList() {
+  async updateCoinList(): Promise<void> {
     try {
       const coins = await this.getHyperliquidCoins();
-      this.supportedCoins.clear();
+      this.coins.clear();
 
       for (const coin of coins) {
-        this.supportedCoins.set(coin.symbol, coin);
+        this.coins.set(coin.symbol, coin);
       }
 
-      this.logger.log(
-        `Updated coin list. Total coins: ${this.supportedCoins.size}`,
-      );
+      this.logger.log(`Updated coin list. Total coins: ${this.coins.size}`);
     } catch (error) {
       this.logger.error('Failed to update coin list:', error);
     }
@@ -51,7 +51,7 @@ export class CoinListService implements OnModuleInit {
     try {
       const { data } = await firstValueFrom(
         this.httpService.post<HyperliquidMeta>(
-          this.HYPERLIQUID_API,
+          'https://api.hyperliquid.xyz/info',
           { type: 'meta' },
           {
             headers: { 'Content-Type': 'application/json' },
@@ -71,11 +71,19 @@ export class CoinListService implements OnModuleInit {
   }
 
   findCoinId(query: string): string | null {
-    const coin = this.supportedCoins.get(query.toLowerCase());
+    const coin = this.coins.get(query.toLowerCase());
     return coin ? coin.id : null;
   }
 
   getSupportedCoins(): CoinInfo[] {
-    return Array.from(this.supportedCoins.values());
+    if (!this.isInitialized) {
+      this.logger.warn('Coin list not yet initialized');
+      return [];
+    }
+    return Array.from(this.coins.values());
+  }
+
+  isReady(): boolean {
+    return this.isInitialized;
   }
 }
