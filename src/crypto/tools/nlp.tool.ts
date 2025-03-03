@@ -1,11 +1,23 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
+import { CoinListService } from '../coin-list.service';
 
 export interface QuestionIntent {
-  type: 'price' | 'funding' | 'comparison' | 'trend' | 'unknown';
+  type: 'price' | 'funding' | 'comparison' | 'trend' | 'unknown' | 'technical';
   targets: string[];
-  action: 'highest' | 'lowest' | 'compare' | 'up' | 'down' | null;
+  action:
+    | 'highest'
+    | 'lowest'
+    | 'compare'
+    | 'up'
+    | 'down'
+    | 'trend'
+    | 'support'
+    | 'rsi'
+    | 'ma'
+    | 'extrema'
+    | null;
   timeframe: 'current' | '1h' | '24h' | '7d';
 }
 
@@ -22,8 +34,18 @@ export class NLPTool {
     'https://api-inference.huggingface.co/models/facebook/bart-large-mnli';
   private readonly HUGGINGFACE_API_KEY = process.env.HUGGINGFACE_API_KEY;
 
-  constructor(private readonly httpService: HttpService) {
-    // console.log(this.BERT_API);
+  private readonly technicalPatterns = {
+    trend: /\b(trend|bullish|bearish)\b/i,
+    support: /\b(support|resistance)\b/i,
+    rsi: /\brsi\b/i,
+    ma: /\b(ma|moving average)\b/i,
+    extrema: /\b(ath|atl|dip|peak)\b/i,
+  };
+
+  constructor(
+    private readonly httpService: HttpService,
+    private readonly coinListService: CoinListService,
+  ) {
     if (!this.BERT_API) {
       this.logger.warn(
         'BERT_API_URL not set, falling back to rule-based analysis',
@@ -32,6 +54,56 @@ export class NLPTool {
   }
 
   async analyzeQuestion(question: string): Promise<QuestionIntent> {
+    const questionLower = question.toLowerCase();
+    const symbols = this.extractSymbols(question);
+
+    // Check for technical analysis patterns first
+    if (this.technicalPatterns.trend.test(questionLower)) {
+      return {
+        type: 'technical',
+        action: 'trend',
+        targets: symbols,
+        timeframe: this.extractTimeframe(questionLower),
+      };
+    }
+
+    if (this.technicalPatterns.support.test(questionLower)) {
+      console.log('Support pattern detected', symbols);
+      return {
+        type: 'technical',
+        action: 'support',
+        targets: symbols,
+        timeframe: 'current',
+      };
+    }
+
+    if (this.technicalPatterns.rsi.test(questionLower)) {
+      return {
+        type: 'technical',
+        action: 'rsi',
+        targets: symbols,
+        timeframe: 'current',
+      };
+    }
+
+    if (this.technicalPatterns.ma.test(questionLower)) {
+      return {
+        type: 'technical',
+        action: 'ma',
+        targets: symbols,
+        timeframe: 'current',
+      };
+    }
+
+    if (this.technicalPatterns.extrema.test(questionLower)) {
+      return {
+        type: 'technical',
+        action: 'extrema',
+        targets: symbols,
+        timeframe: this.extractTimeframe(questionLower),
+      };
+    }
+
     try {
       const headers = {
         Authorization: `Bearer ${this.HUGGINGFACE_API_KEY}`,
@@ -51,6 +123,11 @@ export class NLPTool {
                 'finding highest funding rate',
                 'finding lowest funding rate',
                 'analyzing market trend',
+                'analyzing technical indicators',
+                'finding support resistance',
+                'calculating RSI',
+                'checking moving average',
+                'finding price extremes',
               ],
             },
             options: {
@@ -104,7 +181,28 @@ export class NLPTool {
         intent.action = 'lowest';
         break;
       case 'analyzing market trend':
-        intent.type = 'trend';
+        intent.type = 'technical';
+        intent.action = 'trend';
+        break;
+      case 'analyzing technical indicators':
+        intent.type = 'technical';
+        intent.action = 'trend';
+        break;
+      case 'finding support resistance':
+        intent.type = 'technical';
+        intent.action = 'support';
+        break;
+      case 'calculating RSI':
+        intent.type = 'technical';
+        intent.action = 'rsi';
+        break;
+      case 'checking moving average':
+        intent.type = 'technical';
+        intent.action = 'ma';
+        break;
+      case 'finding price extremes':
+        intent.type = 'technical';
+        intent.action = 'extrema';
         break;
     }
 
@@ -178,5 +276,44 @@ export class NLPTool {
   private hasPriceKeywords(text: string): boolean {
     const keywords = ['price', 'cost', 'worth', 'value'];
     return keywords.some((keyword) => text.includes(keyword));
+  }
+
+  private extractSymbols(question: string): string[] {
+    const words = question.toUpperCase().split(/\s+/);
+    const supportedCoins = this.coinListService.getSupportedCoins();
+
+    // Find all supported coin symbols in the question
+    const foundSymbols = words.filter((word) =>
+      supportedCoins.some(
+        (coin) =>
+          coin.symbol.toUpperCase() === word ||
+          coin.symbol.toUpperCase() === word.replace(/[.,!?:;'"(){}[\]]+$/, ''), // Handle all common punctuation
+      ),
+    );
+
+    console.log('Found symbols:', foundSymbols);
+
+    // If no symbols found, try to find partial matches
+    if (foundSymbols.length === 0) {
+      const partialMatches = words.filter((word) =>
+        supportedCoins.some((coin) => {
+          const cleanWord = word.replace(/[.,!?:;'"(){}[\]]+/g, ''); // Clean all punctuation
+          return (
+            cleanWord.includes(coin.symbol) || coin.symbol.includes(cleanWord)
+          );
+        }),
+      );
+      if (partialMatches.length > 0) {
+        return [partialMatches[0]]; // Return first partial match
+      }
+    }
+
+    console.log('Found symbols:', foundSymbols);
+    return foundSymbols;
+  }
+
+  private extractTimeframe(question: string): 'current' | '1h' | '24h' | '7d' {
+    // Implementation of extractTimeframe method
+    return 'current';
   }
 }

@@ -3,12 +3,14 @@ import { ChatOpenAI } from '@langchain/openai';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { CoinListService } from './coin-list.service';
 import { CryptoSupervisor } from './crypto.supervisor';
-import { PriceData } from './tools/price.tool';
 import { FundingData } from './tools/funding.tool';
 import { NLPTool, QuestionIntent } from './tools/nlp.tool';
 import { CacheService } from './cache.service';
 import { PathRAGTool } from './tools/path-rag.tool';
 import { RAGManagerService } from './rag-manager.service';
+import * as chrono from 'chrono-node';
+import { PriceQueryParser } from './utils/price-query.parser';
+import { PriceData } from './types/price.type';
 
 interface AIResponse {
   response: string;
@@ -20,6 +22,13 @@ type CryptoData =
   | { type: 'price'; data: PriceData }
   | { type: 'funding'; data: FundingData }
   | { type: 'combined'; data: { price: PriceData; funding: FundingData } };
+
+interface DateQueryResult {
+  symbol: string;
+  date: Date;
+  isMonth: boolean;
+  priceType?: 'highest' | 'lowest';
+}
 
 @Injectable()
 export class CryptoService {
@@ -74,7 +83,7 @@ export class CryptoService {
     try {
       const intent = await this.nlpTool.analyzeQuestion(question);
       const symbols = this.getSymbolsFromIntent(intent);
-      // console.log('Symbols:', symbols);
+      console.log('Symbols:', symbols);
       if (symbols.length === 0) return this.getAvailableCoinsMessage();
 
       const cacheKey = this.generateCacheKey(question, symbols, intent);
@@ -307,95 +316,162 @@ export class CryptoService {
     symbols: string[],
     data: CryptoData[],
   ): Promise<string> {
-    // Check for date-based queries first
-    const dateQuery = this.parseDateQuery(question);
-    console.log('dateQuery', dateQuery);
-    if (dateQuery) {
-      const { symbol, date, isMonth } = dateQuery;
+    const query = PriceQueryParser.parse(question);
+    console.log('query', query);
+
+    if (query) {
+      const {
+        symbol,
+        date,
+        isMonth,
+        priceType,
+        type,
+        technicalType,
+        technicalPeriod,
+      } = query;
       const { startDate, lastUpdate, isReady } =
         this.ragManager.getDataAvailability();
+
       if (!isReady) {
         return 'Historical price data is being loaded. Please try again in a few minutes.';
       }
 
-      if (!startDate) {
-        return 'No historical price data is available. Please try again later.';
-      }
-
-      if (date > new Date()) {
-        return `I cannot provide price information for future dates. The requested date (${date.toLocaleDateString()}) is in the future.`;
-      }
-
-      if (date < startDate) {
-        return `Historical price data for ${symbol} on ${date.toLocaleDateString()} is not available. Data is available from ${startDate.toLocaleDateString()} onwards.`;
-      }
-
-      if (isMonth) {
-        const prices = this.ragManager.searchByMonth(
+      if (type === 'technical') {
+        const analysis = this.ragManager.getTechnicalAnalysis(
           symbol,
-          date.getFullYear(),
-          date.getMonth() + 1,
+          technicalType!,
+          technicalPeriod || 14,
         );
-        console.log('prices', prices);
-        if (prices.length > 0) {
-          const avgPrice =
-            prices.reduce((sum, p) => sum + p.averagePrice, 0) / prices.length;
-          return `The average price of ${symbol} in ${date.toLocaleString('default', { month: 'long', year: 'numeric' })} was $${avgPrice.toLocaleString()} (Data last updated: ${lastUpdate.toLocaleString()})`;
+
+        if (analysis) {
+          if ('trend' in analysis) {
+            return analysis.description;
+          }
+          if ('value' in analysis) {
+            return `${symbol} ${technicalType?.toUpperCase()}: ${analysis.value.toFixed(2)} (${analysis.description})`;
+          }
+          if ('support' in analysis) {
+            return `${symbol} Support: $${analysis.support.toLocaleString()}, Resistance: $${analysis.resistance.toLocaleString()}`;
+          }
+          if ('prices' in analysis) {
+            const dateStr = new Date(
+              analysis.prices[0].timestamp,
+            ).toLocaleDateString();
+            return `The ${technicalType} of ${symbol} was $${analysis.averagePrice.toLocaleString()} on ${dateStr}`;
+          }
         }
-      } else {
-        const price = this.ragManager.searchByDate(symbol, date);
-        if (price) {
-          return `The price of ${symbol} on ${date.toLocaleDateString()} was $${price.averagePrice.toLocaleString()} (Data last updated: ${lastUpdate.toLocaleString()})`;
-        }
+        return `Could not calculate ${technicalType} for ${symbol}`;
       }
 
-      return `No price data available for ${symbol} on ${date.toLocaleDateString()}. Data might be missing for this specific date.`;
+      if (type === 'date' && date) {
+        if (date > new Date()) {
+          return `I cannot provide price information for future dates. The requested date (${date.toLocaleDateString()}) is in the future.`;
+        }
+
+        if (startDate && date < startDate) {
+          return `Historical price data for ${symbol} on ${date.toLocaleDateString()} is not available. Data is available from ${startDate.toLocaleDateString()} onwards.`;
+        }
+
+        if (isMonth) {
+          if (date.getDate() === 1 && date.getMonth() === 0 && priceType) {
+            // Year query with highest/lowest
+            const price = this.ragManager.searchByYear(
+              symbol,
+              date.getFullYear(),
+              priceType,
+            );
+            if (price) {
+              const dateStr = new Date(
+                price.prices[0].timestamp,
+              ).toLocaleDateString();
+              return `The ${priceType} price of ${symbol} in ${date.getFullYear()} was $${price.averagePrice.toLocaleString()} on ${dateStr} (Data last updated: ${lastUpdate.toLocaleString()})`;
+            }
+          }
+
+          const prices = this.ragManager.searchByMonth(
+            symbol,
+            date.getFullYear(),
+            date.getMonth() + 1,
+            priceType,
+          );
+          if (prices.length > 0) {
+            if (priceType) {
+              const dateStr = new Date(
+                prices[0].prices[0].timestamp,
+              ).toLocaleDateString();
+              return `The ${priceType} price of ${symbol} in ${date.toLocaleString(
+                'default',
+                { month: 'long', year: 'numeric' },
+              )} was $${prices[0].averagePrice.toLocaleString()} on ${dateStr} (Data last updated: ${lastUpdate.toLocaleString()})`;
+            }
+            const avgPrice =
+              prices.reduce((sum, p) => sum + p.averagePrice, 0) /
+              prices.length;
+            return `The average price of ${symbol} in ${date.toLocaleString(
+              'default',
+              { month: 'long', year: 'numeric' },
+            )} was $${avgPrice.toLocaleString()} (Data last updated: ${lastUpdate.toLocaleString()})`;
+          }
+        } else {
+          const price = this.ragManager.searchByDate(symbol, date);
+          if (price) {
+            return `The price of ${symbol} on ${date.toLocaleDateString()} was $${price.averagePrice.toLocaleString()} (Data last updated: ${lastUpdate.toLocaleString()})`;
+          }
+        }
+
+        return `No price data available for ${symbol} on ${date.toLocaleDateString()}. Data might be missing for this specific date.`;
+      }
+
+      // Only use LLM for non-technical, non-date queries
+      const context = this.formatResponse(data);
+      const symbolList = symbols.join(', ').toUpperCase();
+
+      const formattedPrompt = await this.promptTemplate.format({
+        symbols: symbolList,
+        context,
+        question,
+      });
+
+      const response = await this.llm.invoke(formattedPrompt);
+      return String(response.content as string);
     }
 
-    // Regular price/trend query processing
-    const context = this.formatResponse(data);
-    const symbolList = symbols.join(', ').toUpperCase();
-
-    const formattedPrompt = await this.promptTemplate.format({
-      symbols: symbolList,
-      context,
-      question,
-    });
-
-    const response = await this.llm.invoke(formattedPrompt);
-    return String(response.content as string);
+    return 'Invalid query format. Please specify a date or a price/trend query.';
   }
 
-  private parseDateQuery(
-    question: string,
-  ): { symbol: string; date: Date; isMonth: boolean } | null {
-    // Match patterns like "BTC price on May 20 2023" or "BTC price in May 2023"
-    const fullDatePattern =
-      /(\w+)\s+price\s+(?:on|at)\s+(\d{1,2})\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})/i;
-    const monthPattern =
-      /(\w+)\s+price\s+in\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{4})/i;
+  private parseDateQuery(question: string): DateQueryResult | null {
+    // First extract the symbol and price type
+    const symbolMatch = question.match(/(\w+)\s+price/i);
+    if (!symbolMatch) return null;
 
-    const fullDateMatch = question.match(fullDatePattern);
-    if (fullDateMatch) {
-      const [_, symbol, day, month, year] = fullDateMatch;
-      return {
-        symbol: symbol.toUpperCase(),
-        date: new Date(`${month} ${day} ${year}`),
-        isMonth: false,
-      };
+    const symbol = symbolMatch[1].toUpperCase();
+
+    // Check for highest/lowest
+    const priceType = question
+      .match(/\b(highest|lowest)\b/i)?.[1]
+      .toLowerCase() as 'highest' | 'lowest' | undefined;
+
+    // Parse the date using chrono
+    const parsedDate = chrono.parse(question)[0];
+    if (!parsedDate) return null;
+
+    const date = parsedDate.start.date();
+
+    // Determine if it's a month query
+    const isMonth = parsedDate.start.isCertain('day') === false;
+
+    // If it's a year-only query, set to January 1st
+    if (parsedDate.start.isCertain('month') === false) {
+      date.setMonth(0);
+      date.setDate(1);
     }
 
-    const monthMatch = question.match(monthPattern);
-    if (monthMatch) {
-      const [_, symbol, month, year] = monthMatch;
-      return {
-        symbol: symbol.toUpperCase(),
-        date: new Date(`${month} 1 ${year}`),
-        isMonth: true,
-      };
-    }
-
-    return null;
+    return {
+      symbol,
+      date,
+      isMonth: isMonth || parsedDate.start.isCertain('month') === false,
+      priceType,
+    };
   }
 
   private getOldestAvailableDate(): Date {

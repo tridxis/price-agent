@@ -2,21 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { HistoricalDataService } from './historical-data.service';
 import { PathRAGTool } from './tools/path-rag.tool';
-import { PriceData } from './tools/price.tool';
 import { CoinListService } from './coin-list.service';
-
-interface TimeframedPriceData extends PriceData {
-  changes: {
-    '1h': number;
-    '24h': number;
-    '7d': number;
-    '30d': number;
-    '90d'?: number;
-    '180d'?: number;
-    '365d'?: number;
-  };
-  date?: string; // ISO date string
-}
+import { TechnicalAnalysisService } from './technical-analysis.service';
+import { TechnicalTerm } from './utils/price-query.parser';
+import { TimeframedPriceData } from './types/price.type';
 
 @Injectable()
 export class RAGManagerService {
@@ -29,6 +18,7 @@ export class RAGManagerService {
   constructor(
     private readonly historicalDataService: HistoricalDataService,
     private readonly coinListService: CoinListService,
+    private readonly technicalAnalysis: TechnicalAnalysisService,
   ) {
     // Initial data load with retry
     void this.initializeData();
@@ -84,7 +74,7 @@ export class RAGManagerService {
             try {
               const [hourlyCandles, dailyCandles] = await Promise.all([
                 this.historicalDataService.getCandles(symbol, '1h', 168),
-                this.historicalDataService.getCandles(symbol, '1d', 365),
+                this.historicalDataService.getCandles(symbol, '1d', 3650),
               ]);
 
               if (hourlyCandles.length > 0 && dailyCandles.length > 0) {
@@ -117,7 +107,13 @@ export class RAGManagerService {
   private storeCurrentPriceData(
     symbol: string,
     hourlyCandles: Array<{ close: number; timestamp: number; volume: number }>,
-    dailyCandles: Array<{ close: number; timestamp: number; volume: number }>,
+    dailyCandles: Array<{
+      close: number;
+      high: number;
+      low: number;
+      timestamp: number;
+      volume: number;
+    }>,
   ) {
     const currentPrice = hourlyCandles[hourlyCandles.length - 1].close;
 
@@ -151,9 +147,14 @@ export class RAGManagerService {
 
   private storeHistoricalData(
     symbol: string,
-    dailyCandles: Array<{ close: number; timestamp: number; volume: number }>,
+    dailyCandles: Array<{
+      close: number;
+      high: number;
+      low: number;
+      timestamp: number;
+      volume: number;
+    }>,
   ) {
-    // Store each daily candle with date-based paths
     for (const candle of dailyCandles) {
       const date = new Date(candle.timestamp);
       const year = date.getUTCFullYear();
@@ -171,6 +172,8 @@ export class RAGManagerService {
           },
         ],
         averagePrice: candle.close,
+        highPrice: candle.high,
+        lowPrice: candle.low,
         changes: {
           '1h': 0,
           '24h': 0,
@@ -180,15 +183,9 @@ export class RAGManagerService {
         date: `${year}-${month}-${day}`,
       };
 
-      // Store by date path: historical/BTC/2023/05/20
+      // Store by date path only
       this.priceRAG.insert(
         ['historical', symbol.toUpperCase(), year.toString(), month, day],
-        priceData,
-      );
-
-      // Store by month path for monthly queries: historical/BTC/2023/05
-      this.priceRAG.insert(
-        ['historical', symbol.toUpperCase(), year.toString(), month],
         priceData,
       );
     }
@@ -216,14 +213,108 @@ export class RAGManagerService {
     symbol: string,
     year: number,
     month: number,
+    priceType?: 'highest' | 'lowest',
   ): TimeframedPriceData[] {
-    console.log('searchByMonth', symbol, year, month);
-    return this.priceRAG.search([
-      'historical',
-      symbol.toUpperCase(),
-      year.toString(),
-      month.toString().padStart(2, '0'),
-    ]);
+    const results: TimeframedPriceData[] = [];
+
+    // Get all days in the month
+    const daysInMonth = new Date(year, month, 0).getDate();
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dailyPrices = this.priceRAG.search([
+        'historical',
+        symbol.toUpperCase(),
+        year.toString(),
+        month.toString().padStart(2, '0'),
+        day.toString().padStart(2, '0'),
+      ]);
+      results.push(...dailyPrices);
+    }
+
+    if (priceType && results.length > 0) {
+      const prices = results.map((r) => ({
+        data: r,
+        price:
+          priceType === 'highest'
+            ? r.highPrice || r.averagePrice
+            : r.lowPrice || r.averagePrice,
+      }));
+
+      const extremePrice =
+        priceType === 'highest'
+          ? Math.max(...prices.map((p) => p.price))
+          : Math.min(...prices.map((p) => p.price));
+
+      const result = prices.find((p) => p.price === extremePrice)?.data;
+      if (result) {
+        return [
+          {
+            ...result,
+            averagePrice: extremePrice, // Use the extreme price as the average price for display
+          },
+        ];
+      }
+    }
+
+    return results;
+  }
+
+  searchByYear(
+    symbol: string,
+    year: number,
+    priceType?: 'highest' | 'lowest',
+  ): TimeframedPriceData | null {
+    console.log('searchByYear', symbol, year, priceType);
+    const results: TimeframedPriceData[] = [];
+
+    // Search through each day of the year instead of months
+    for (let month = 1; month <= 12; month++) {
+      const daysInMonth = new Date(year, month, 0).getDate();
+
+      for (let day = 1; day <= daysInMonth; day++) {
+        const dailyPrices = this.priceRAG.search([
+          'historical',
+          symbol.toUpperCase(),
+          year.toString(),
+          month.toString().padStart(2, '0'),
+          day.toString().padStart(2, '0'),
+        ]);
+        results.push(...dailyPrices);
+      }
+    }
+
+    if (results.length === 0) return null;
+
+    if (priceType) {
+      const prices = results.map((r) => ({
+        data: r,
+        price:
+          priceType === 'highest'
+            ? r.highPrice || r.averagePrice
+            : r.lowPrice || r.averagePrice,
+      }));
+
+      const extremePrice =
+        priceType === 'highest'
+          ? Math.max(...prices.map((p) => p.price))
+          : Math.min(...prices.map((p) => p.price));
+
+      const result = prices.find((p) => p.price === extremePrice)?.data;
+      if (result) {
+        return {
+          ...result,
+          averagePrice: extremePrice, // Use the extreme price as the average price for display
+        };
+      }
+    }
+
+    // If no price type specified, return average
+    const avgPrice =
+      results.reduce((sum, r) => sum + r.averagePrice, 0) / results.length;
+    return {
+      ...results[0],
+      averagePrice: avgPrice,
+    };
   }
 
   private calculatePriceChange(
@@ -259,5 +350,192 @@ export class RAGManagerService {
       lastUpdate: new Date(this.lastUpdateTime),
       isReady: this.isInitialized,
     };
+  }
+
+  searchAllTime(
+    symbol: string,
+    priceType: 'highest' | 'lowest',
+  ): TimeframedPriceData | null {
+    const results: TimeframedPriceData[] = [];
+    const upperSymbol = symbol.toUpperCase();
+
+    // Get all years from data start date to now
+    const startYear =
+      this.dataStartDate?.getFullYear() || new Date().getFullYear();
+    const endYear = new Date().getFullYear();
+
+    // Search through each day of each year
+    for (let year = startYear; year <= endYear; year++) {
+      for (let month = 1; month <= 12; month++) {
+        const daysInMonth = new Date(year, month, 0).getDate();
+        for (let day = 1; day <= daysInMonth; day++) {
+          const dailyPrices = this.priceRAG.search([
+            'historical',
+            upperSymbol,
+            year.toString(),
+            month.toString().padStart(2, '0'),
+            day.toString().padStart(2, '0'),
+          ]);
+          results.push(...dailyPrices);
+        }
+      }
+    }
+
+    if (results.length === 0) return null;
+
+    const prices = results.map((r) => ({
+      data: r,
+      price:
+        priceType === 'highest'
+          ? r.highPrice || r.averagePrice
+          : r.lowPrice || r.averagePrice,
+    }));
+
+    const extremePrice =
+      priceType === 'highest'
+        ? Math.max(...prices.map((p) => p.price))
+        : Math.min(...prices.map((p) => p.price));
+
+    const result = prices.find((p) => p.price === extremePrice)?.data;
+    if (result) {
+      return {
+        ...result,
+        averagePrice: extremePrice,
+      };
+    }
+
+    return null;
+  }
+
+  searchLocalExtremum(
+    symbol: string,
+    priceType: 'highest' | 'lowest',
+    days: number,
+  ): TimeframedPriceData | null {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - days);
+    const results: TimeframedPriceData[] = [];
+    const upperSymbol = symbol.toUpperCase();
+
+    // Get dates from cutoff to now
+    const startDate = new Date(cutoffDate);
+    const endDate = new Date();
+
+    // Search through each day in the range
+    for (
+      let date = startDate;
+      date <= endDate;
+      date.setDate(date.getDate() + 1)
+    ) {
+      const year = date.getUTCFullYear();
+      const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
+      const day = date.getUTCDate().toString().padStart(2, '0');
+
+      const dailyPrices = this.priceRAG.search([
+        'historical',
+        upperSymbol,
+        year.toString(),
+        month,
+        day,
+      ]);
+      results.push(...dailyPrices);
+    }
+
+    if (results.length === 0) return null;
+
+    const prices = results.map((r) => ({
+      data: r,
+      price:
+        priceType === 'highest'
+          ? r.highPrice || r.averagePrice
+          : r.lowPrice || r.averagePrice,
+    }));
+
+    const extremePrice =
+      priceType === 'highest'
+        ? Math.max(...prices.map((p) => p.price))
+        : Math.min(...prices.map((p) => p.price));
+
+    const result = prices.find((p) => p.price === extremePrice)?.data;
+
+    console.log('result', result);
+    if (result) {
+      return {
+        ...result,
+        averagePrice: extremePrice,
+      };
+    }
+
+    return null;
+  }
+
+  getTechnicalAnalysis(symbol: string, type: TechnicalTerm, period?: number) {
+    const days = period || 30; // Default to 30 days if period is undefined
+    const results: TimeframedPriceData[] = [];
+    const upperSymbol = symbol.toUpperCase();
+    const endDate = new Date();
+    const startDate = new Date(endDate);
+    startDate.setDate(startDate.getDate() - days);
+
+    // Get historical data
+    for (
+      let date = startDate;
+      date <= endDate;
+      date.setDate(date.getDate() + 1)
+    ) {
+      const year = date.getUTCFullYear();
+      const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
+      const day = date.getUTCDate().toString().padStart(2, '0');
+
+      const dailyPrices = this.priceRAG.search([
+        'historical',
+        upperSymbol,
+        year.toString(),
+        month,
+        day,
+      ]);
+      results.push(...dailyPrices);
+    }
+
+    if (results.length === 0) return null;
+
+    switch (type) {
+      case 'trend':
+        return this.technicalAnalysis.analyzeTrend(results);
+      case 'support':
+      case 'resistance':
+        return this.technicalAnalysis.findSupportResistance(results);
+      case 'rsi':
+        return {
+          value: this.technicalAnalysis.calculateRSI(
+            results.map((d) => d.averagePrice),
+            period || 14, // Default to 14 days for RSI
+          ),
+          description: 'RSI indicates overbought > 70, oversold < 30',
+        };
+      case 'ma':
+        return {
+          value: this.technicalAnalysis.calculateMA(
+            results.map((d) => d.averagePrice),
+            period || 14, // Default to 14 days for MA
+          ),
+          description: `${period || 14}-day Moving Average`,
+        };
+      case 'dip':
+      case 'peak':
+        return this.searchLocalExtremum(
+          symbol,
+          type === 'dip' ? 'lowest' : 'highest',
+          days,
+        );
+      case 'ath':
+      case 'atl':
+        return this.searchAllTime(
+          symbol,
+          type === 'ath' ? 'highest' : 'lowest',
+        );
+      default:
+        return null;
+    }
   }
 }

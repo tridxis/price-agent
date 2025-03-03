@@ -12,6 +12,7 @@ import { FundingTool } from './tools/funding.tool';
 import { NLPTool } from './tools/nlp.tool';
 import { HistoricalDataService } from './historical-data.service';
 import { RAGManagerService } from './rag-manager.service';
+import { TechnicalAnalysisService } from './technical-analysis.service';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { RAGManagerService } from './rag-manager.service';
     CryptoSupervisor,
     NLPTool,
     HistoricalDataService,
+    TechnicalAnalysisService,
     RAGManagerService,
   ],
 })
