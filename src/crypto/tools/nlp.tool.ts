@@ -55,7 +55,7 @@ export class NLPTool {
 
   async analyzeQuestion(question: string): Promise<QuestionIntent> {
     const questionLower = question.toLowerCase();
-    const symbols = this.extractSymbols(question);
+    const symbols = await this.extractSymbols(question);
 
     // Check for technical analysis patterns first
     if (this.technicalPatterns.trend.test(questionLower)) {
@@ -278,37 +278,108 @@ export class NLPTool {
     return keywords.some((keyword) => text.includes(keyword));
   }
 
-  private extractSymbols(question: string): string[] {
+  private async extractSymbols(question: string): Promise<string[]> {
+    // First try regex-based extraction
+    const regexSymbols = this.extractSymbolsByRegex(question);
+    if (regexSymbols.length > 0 && !this.needsContextualAnalysis(question)) {
+      return regexSymbols;
+    }
+
+    try {
+      // Use BERT for contextual analysis
+      const { data } = await firstValueFrom(
+        this.httpService.post<BertResponse>(
+          this.BERT_API,
+          {
+            inputs: question,
+            parameters: {
+              candidate_labels: [
+                'mentions specific cryptocurrencies',
+                'refers to all cryptocurrencies',
+                'excludes specific cryptocurrencies',
+                'compares cryptocurrencies',
+              ],
+            },
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${this.HUGGINGFACE_API_KEY}`,
+              'Content-Type': 'application/json',
+            },
+          },
+        ),
+      );
+
+      const topLabel =
+        data.labels[data.scores.indexOf(Math.max(...data.scores))];
+      const supportedCoins = this.coinListService.getSupportedCoins();
+      const upperSymbols = supportedCoins.map((coin) =>
+        coin.symbol.toUpperCase(),
+      );
+
+      switch (topLabel) {
+        case 'refers to all cryptocurrencies':
+          return upperSymbols;
+
+        case 'excludes specific cryptocurrencies': {
+          const excludedSymbols = this.extractSymbolsByRegex(question);
+          return upperSymbols.filter(
+            (symbol) => !excludedSymbols.includes(symbol),
+          );
+        }
+
+        case 'mentions specific cryptocurrencies':
+          return regexSymbols.length > 0 ? regexSymbols : [upperSymbols[0]]; // Default to first coin if no matches
+
+        default:
+          return regexSymbols;
+      }
+    } catch (error) {
+      this.logger.warn(`BERT analysis failed, falling back to regex: ${error}`);
+      return regexSymbols;
+    }
+  }
+
+  private needsContextualAnalysis(question: string): boolean {
+    const contextualPatterns = [
+      /\b(all|every|any)\b/i,
+      /\b(except|but|not|excluding)\b/i,
+      /\b(others|rest|remaining)\b/i,
+      /\b(like|similar to)\b/i,
+    ];
+
+    return contextualPatterns.some((pattern) => pattern.test(question));
+  }
+
+  // Rename the current extractSymbols to extractSymbolsByRegex
+  private extractSymbolsByRegex(question: string): string[] {
     const words = question.toUpperCase().split(/\s+/);
     const supportedCoins = this.coinListService.getSupportedCoins();
+    const upperSymbols = supportedCoins.map((coin) =>
+      coin.symbol.toUpperCase(),
+    );
 
-    // Find all supported coin symbols in the question
+    // Regular symbol matching
     const foundSymbols = words.filter((word) =>
-      supportedCoins.some(
-        (coin) =>
-          coin.symbol.toUpperCase() === word ||
-          coin.symbol.toUpperCase() === word.replace(/[.,!?:;'"(){}[\]]+$/, ''), // Handle all common punctuation
+      upperSymbols.some(
+        (symbol) =>
+          symbol === word || symbol === word.replace(/[.,!?:;'"(){}[\]]+$/, ''),
       ),
     );
 
-    console.log('Found symbols:', foundSymbols);
-
-    // If no symbols found, try to find partial matches
+    // If no direct matches found, try partial matches
     if (foundSymbols.length === 0) {
       const partialMatches = words.filter((word) =>
-        supportedCoins.some((coin) => {
-          const cleanWord = word.replace(/[.,!?:;'"(){}[\]]+/g, ''); // Clean all punctuation
-          return (
-            cleanWord.includes(coin.symbol) || coin.symbol.includes(cleanWord)
-          );
+        upperSymbols.some((symbol) => {
+          const cleanWord = word.replace(/[.,!?:;'"(){}[\]]+/g, '');
+          return cleanWord.includes(symbol) || symbol.includes(cleanWord);
         }),
       );
       if (partialMatches.length > 0) {
-        return [partialMatches[0]]; // Return first partial match
+        return [partialMatches[0]];
       }
     }
 
-    console.log('Found symbols:', foundSymbols);
     return foundSymbols;
   }
 

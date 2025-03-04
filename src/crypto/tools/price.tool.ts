@@ -3,19 +3,7 @@ import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { CacheService } from '../cache.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
-
-export interface ExchangePrice {
-  exchange: string;
-  price: number;
-  timestamp: number;
-  volume?: number;
-}
-
-export interface PriceData {
-  symbol: string;
-  prices: ExchangePrice[];
-  averagePrice: number;
-}
+import { ExchangePrice, PriceData } from '../types/price.type';
 
 interface HyperliquidResponse {
   [key: string]: number;
@@ -195,6 +183,7 @@ export class PriceTool implements OnModuleInit {
     const upperSymbol = symbol.toUpperCase();
 
     // Check cache first
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const cached = this.cacheService.get(`price_${upperSymbol}`, 'price');
     if (cached) return cached as unknown as PriceData;
 
