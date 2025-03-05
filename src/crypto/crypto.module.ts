@@ -13,6 +13,7 @@ import { NLPTool } from './tools/nlp.tool';
 import { HistoricalDataService } from './historical-data.service';
 import { RAGManagerService } from './rag-manager.service';
 import { TechnicalAnalysisService } from './technical-analysis.service';
+import { PricePredictionService } from './price-prediction.service';
 
 @Module({
   imports: [
@@ -34,6 +35,7 @@ import { TechnicalAnalysisService } from './technical-analysis.service';
     HistoricalDataService,
     TechnicalAnalysisService,
     RAGManagerService,
+    PricePredictionService,
   ],
 })
 export class CryptoModule {}

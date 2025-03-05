@@ -5,7 +5,14 @@ import { CoinListService } from '../coin-list.service';
 import * as chrono from 'chrono-node';
 
 export interface QuestionIntent {
-  type: 'price' | 'funding' | 'comparison' | 'trend' | 'unknown' | 'technical';
+  type:
+    | 'price'
+    | 'funding'
+    | 'comparison'
+    | 'trend'
+    | 'unknown'
+    | 'technical'
+    | 'prediction';
   targets: string[];
   action:
     | 'highest'
@@ -18,6 +25,7 @@ export interface QuestionIntent {
     | 'rsi'
     | 'ma'
     | 'extrema'
+    | 'predict'
     | null;
   timeframe: 'current' | '1h' | '24h' | '7d';
 }
@@ -93,7 +101,18 @@ export class NLPTool {
   async analyzeQuestion(question: string): Promise<QuestionIntent> {
     const questionLower = question.toLowerCase();
 
-    // Try technical analysis first
+    // Check for prediction keywords first
+    if (this.hasPredictionKeywords(questionLower)) {
+      const symbols = await this.extractSymbols(question);
+      return {
+        type: 'prediction',
+        action: 'predict',
+        targets: symbols,
+        timeframe: 'current',
+      };
+    }
+
+    // Try technical analysis next
     const technicalMatch = this.matchTechnicalQuery(question);
     if (technicalMatch) {
       return {
@@ -115,7 +134,6 @@ export class NLPTool {
       };
     }
 
-    // Fall back to BERT analysis for other queries
     const symbols = await this.extractSymbols(question);
     return this.analyzeBertResponse(question, symbols);
   }
@@ -353,37 +371,48 @@ export class NLPTool {
         this.httpService.post<BertResponse>(
           this.BERT_API,
           {
-            inputs: `${question}`,
+            inputs: question,
             parameters: {
               candidate_labels: [
                 'asking about price',
-                'asking about funding rate',
-                'comparing funding rates',
-                'finding highest funding rate',
+                'asking or comparing about funding rate',
                 'analyzing market trend',
                 'analyzing technical indicators',
                 'finding support resistance',
                 'calculating RSI',
                 'checking moving average',
                 'finding price extremes',
+                'predicting future price',
+                'forecasting price movement',
               ],
             },
-            options: {
-              wait_for_model: true,
-            },
+            options: { wait_for_model: true },
           },
           { headers },
         ),
       );
 
-      // console.log('API Response:', data); // Debug log
       return this.mapBertResponseToIntent(data, symbols);
-    } catch (error: any) {
+    } catch (error) {
       this.logger.warn(
         `NLP analysis failed: ${error}, falling back to rule-based analysis`,
       );
       return this.fallbackAnalysis(question);
     }
+  }
+
+  private hasPredictionKeywords(question: string): boolean {
+    const keywords = [
+      'next day',
+      'tomorrow',
+      'predict',
+      'prediction',
+      'forecast',
+      'will be',
+      'going to be',
+    ];
+    const questionLower = question.toLowerCase();
+    return keywords.some((keyword) => questionLower.includes(keyword));
   }
 
   private mapBertResponseToIntent(
@@ -403,8 +432,6 @@ export class NLPTool {
     if (topScore < 0.5) {
       throw new Error('Low confidence score');
     }
-
-    // console.log('Top Label:', topLabel, 'Score:', topScore); // Debug log
 
     switch (topLabel) {
       case 'asking about price':
@@ -449,9 +476,13 @@ export class NLPTool {
         intent.type = 'technical';
         intent.action = 'extrema';
         break;
+      case 'predicting future price':
+      case 'forecasting price movement':
+        intent.type = 'prediction';
+        intent.action = 'predict';
+        break;
     }
 
-    // console.log('Mapped Intent:', intent); // Debug log
     return intent;
   }
 

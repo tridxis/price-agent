@@ -14,6 +14,7 @@ import * as chrono from 'chrono-node';
 import { PriceQueryParser } from './utils/price-query.parser';
 import { PriceData } from './types/price.type';
 import { TechnicalAnalysisService } from './technical-analysis.service';
+import { PricePredictionService } from './price-prediction.service';
 
 interface AIResponse {
   response: string;
@@ -51,6 +52,7 @@ export class CryptoService {
     private readonly cacheService: CacheService,
     private readonly ragManager: RAGManagerService,
     private readonly technicalAnalysis: TechnicalAnalysisService,
+    private readonly pricePrediction: PricePredictionService,
   ) {
     if (!process.env.OPENAI_API_KEY) {
       throw new Error('OPENAI_API_KEY environment variable is not set');
@@ -93,6 +95,8 @@ export class CryptoService {
       const cacheKey = this.generateCacheKey(question, intent.targets, intent);
       const cached = this.getCachedResponse(cacheKey);
       if (cached) return cached;
+
+      console.log('intent', intent);
 
       const data = await this.getRequiredData(intent);
       const response = await this.generateResponse(
@@ -139,6 +143,28 @@ export class CryptoService {
             type: 'combined',
             data: { price, funding },
           });
+          break;
+        }
+        case 'prediction': {
+          console.log('prediction');
+          const historicalData = await this.ragManager.getHistoricalData(
+            symbol,
+            7,
+          );
+          if (historicalData.length > 0) {
+            const prediction =
+              this.pricePrediction.predictNextDay(historicalData);
+            results.push({
+              type: 'technical',
+              data: {
+                symbol,
+                prediction: prediction.prediction,
+                confidence: prediction.confidence,
+                trend: prediction.trend,
+                description: `Predicted ${prediction.trend} movement with ${prediction.confidence.toFixed(1)}% confidence`,
+              },
+            });
+          }
           break;
         }
       }
