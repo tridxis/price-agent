@@ -194,7 +194,6 @@ export class RAGManagerService {
 
   // Search methods for different query types
   searchByDate(symbol: string, date: Date): TimeframedPriceData | null {
-    console.log('searchByDate', symbol, date);
     const year = date.getUTCFullYear();
     const month = (date.getUTCMonth() + 1).toString().padStart(2, '0');
     const day = date.getUTCDate().toString().padStart(2, '0');
@@ -265,7 +264,6 @@ export class RAGManagerService {
     year: number,
     priceType?: 'highest' | 'lowest',
   ): TimeframedPriceData | null {
-    console.log('searchByYear', symbol, year, priceType);
     const results: TimeframedPriceData[] = [];
 
     // Search through each day of the year instead of months
@@ -312,7 +310,6 @@ export class RAGManagerService {
     // If no price type specified, return average
     const avgPrice =
       results.reduce((sum, r) => sum + r.averagePrice, 0) / results.length;
-    console.log('avgPrice', avgPrice);
     return {
       ...results[0],
       averagePrice: avgPrice,
@@ -460,7 +457,6 @@ export class RAGManagerService {
 
     const result = prices.find((p) => p.price === extremePrice)?.data;
 
-    console.log('result', result);
     if (result) {
       return {
         ...result,

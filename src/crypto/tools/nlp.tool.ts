@@ -376,7 +376,7 @@ export class NLPTool {
         ),
       );
 
-      console.log('API Response:', data); // Debug log
+      // console.log('API Response:', data); // Debug log
       return this.mapBertResponseToIntent(data, symbols);
     } catch (error: any) {
       this.logger.warn(

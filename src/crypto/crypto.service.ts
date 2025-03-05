@@ -86,7 +86,6 @@ export class CryptoService {
   async processQuestion(question: string): Promise<string> {
     try {
       const intent = await this.nlpTool.analyzeQuestion(question);
-      console.log('intent', intent);
       if (intent.targets.length === 0 && intent.type !== 'unknown') {
         return this.getAvailableCoinsMessage();
       }
@@ -123,7 +122,6 @@ export class CryptoService {
         }
         case 'price': {
           const data = await this.cryptoSupervisor.getPrice(symbol);
-          console.log('data', data);
           results.push({ type: 'price', data });
           break;
         }
@@ -426,40 +424,6 @@ export class CryptoService {
     return date;
   }
 
-  private searchRAG(intent: QuestionIntent): CryptoData[] {
-    const results: CryptoData[] = [];
-    const timeRange = this.getTimeRangeFromIntent(intent);
-
-    console.log('intent', intent);
-
-    for (const symbol of intent.targets) {
-      const upperSymbol = symbol.toUpperCase();
-
-      if (intent.type === 'trend') {
-        // Search for historical data to analyze trends
-        const priceHistory = this.priceRAG.search(['prices', upperSymbol], {
-          timeRange,
-          trend: intent.action || 'stable',
-        });
-        console.log(priceHistory);
-        if (priceHistory.length > 0) {
-          results.push({
-            type: 'price',
-            data: this.analyzeTrend(priceHistory),
-          });
-        }
-      } else {
-        // Regular price/funding queries
-        const latestData = this.priceRAG.search(['prices', upperSymbol])[0];
-        if (latestData) {
-          results.push({ type: 'price', data: latestData });
-        }
-      }
-    }
-
-    return results;
-  }
-
   private getTimeRangeFromIntent(intent: QuestionIntent): number {
     switch (intent.timeframe) {
       case '1h':
@@ -471,10 +435,5 @@ export class CryptoService {
       default:
         return 0; // current
     }
-  }
-
-  private analyzeTrend(priceHistory: PriceData[]): PriceData {
-    // Implement trend analysis logic here
-    return priceHistory[Math.floor(priceHistory.length / 2)];
   }
 }
