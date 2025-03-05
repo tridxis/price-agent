@@ -6,6 +6,7 @@ import { CoinListService } from './coin-list.service';
 import { TechnicalAnalysisService } from './technical-analysis.service';
 import { TechnicalTerm } from './utils/price-query.parser';
 import { TimeframedPriceData } from './types/price.type';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class RAGManagerService {
@@ -311,6 +312,7 @@ export class RAGManagerService {
     // If no price type specified, return average
     const avgPrice =
       results.reduce((sum, r) => sum + r.averagePrice, 0) / results.length;
+    console.log('avgPrice', avgPrice);
     return {
       ...results[0],
       averagePrice: avgPrice,
@@ -536,6 +538,55 @@ export class RAGManagerService {
         );
       default:
         return null;
+    }
+  }
+
+  async getHistoricalData(
+    symbol: string,
+    days: number,
+  ): Promise<TimeframedPriceData[]> {
+    try {
+      const response = await this.historicalDataService.getCandles(
+        symbol,
+        '1h',
+        days * 24 + 720,
+      );
+
+      return response.slice(720).map((c, index) => ({
+        symbol,
+        prices: [
+          {
+            exchange: 'Hyperliquid',
+            price: c.close,
+            timestamp: c.timestamp,
+            volume: c.volume,
+          },
+        ],
+        averagePrice: c.close,
+        changes: {
+          '1h': this.calculatePriceChange(
+            response.slice(0, response.length - index),
+            1,
+          ),
+          '24h': this.calculatePriceChange(
+            response.slice(0, response.length - index),
+            24,
+          ),
+          '7d': this.calculatePriceChange(
+            response.slice(0, response.length - index),
+            168,
+          ),
+          '30d': this.calculatePriceChange(
+            response.slice(0, response.length - index),
+            720,
+          ),
+        },
+        highPrice: c.high,
+        lowPrice: c.low,
+      }));
+    } catch (error) {
+      this.logger.error(`Failed to get historical data for ${symbol}:`, error);
+      return [];
     }
   }
 }

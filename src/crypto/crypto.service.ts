@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-unsafe-call */
+/* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Injectable, Logger } from '@nestjs/common';
 import { ChatOpenAI } from '@langchain/openai';
 import { PromptTemplate } from '@langchain/core/prompts';
@@ -11,6 +13,7 @@ import { RAGManagerService } from './rag-manager.service';
 import * as chrono from 'chrono-node';
 import { PriceQueryParser } from './utils/price-query.parser';
 import { PriceData } from './types/price.type';
+import { TechnicalAnalysisService } from './technical-analysis.service';
 
 interface AIResponse {
   response: string;
@@ -21,6 +24,7 @@ interface AIResponse {
 type CryptoData =
   | { type: 'price'; data: PriceData }
   | { type: 'funding'; data: FundingData }
+  | { type: 'technical'; data: any }
   | { type: 'combined'; data: { price: PriceData; funding: FundingData } };
 
 interface DateQueryResult {
@@ -46,6 +50,7 @@ export class CryptoService {
     private readonly nlpTool: NLPTool,
     private readonly cacheService: CacheService,
     private readonly ragManager: RAGManagerService,
+    private readonly technicalAnalysis: TechnicalAnalysisService,
   ) {
     if (!process.env.OPENAI_API_KEY) {
       throw new Error('OPENAI_API_KEY environment variable is not set');
@@ -59,125 +64,89 @@ export class CryptoService {
     });
 
     this.promptTemplate = PromptTemplate.fromTemplate(`
-      You are a helpful cryptocurrency expert. Use the following price and funding rate data to answer the user's question.
+      You are a helpful cryptocurrency expert. Use the following data to answer the user's question.
       Available cryptocurrencies: {symbols}
       
-      Current prices and funding rates:
+      Data context:
       {context}
       
       Question: {question}
       
-      Please provide a clear and concise answer based on the available data. 
-      For funding rates:
-      - Positive rates mean longs pay shorts
-      - Negative rates mean shorts pay longs
-      - When comparing rates, consider the average rate across exchanges
-      - Higher funding rates indicate stronger bullish sentiment
-      - Lower/negative rates indicate stronger bearish sentiment
+      Please provide a clear and concise answer based on the available data.
+      For technical analysis:
+      - RSI > 70 indicates overbought conditions
+      - RSI < 30 indicates oversold conditions
+      - Moving averages help identify trends
+      - Support/resistance levels indicate key price points
     `);
 
     this.priceRAG = this.ragManager.getPriceRAG();
   }
 
-  async processQuestion(question: string, useRAG = true): Promise<string> {
+  async processQuestion(question: string): Promise<string> {
     try {
       const intent = await this.nlpTool.analyzeQuestion(question);
-      const symbols = this.getSymbolsFromIntent(intent);
-      console.log('Symbols:', symbols);
-      if (symbols.length === 0) return this.getAvailableCoinsMessage();
+      console.log('intent', intent);
+      if (intent.targets.length === 0 && intent.type !== 'unknown') {
+        return this.getAvailableCoinsMessage();
+      }
 
-      const cacheKey = this.generateCacheKey(question, symbols, intent);
+      const cacheKey = this.generateCacheKey(question, intent.targets, intent);
       const cached = this.getCachedResponse(cacheKey);
       if (cached) return cached;
 
-      const data = await this.getRequiredData(intent, symbols, 0, useRAG);
-      const response = await this.generateResponse(question, symbols, data);
+      const data = await this.getRequiredData(intent);
+      const response = await this.generateResponse(
+        question,
+        intent.targets,
+        data,
+      );
 
       this.cacheResponse(cacheKey, response);
       return response;
     } catch (error) {
       const err = error as Error;
       this.logger.error(`Failed to process question: ${err.message}`);
-      return 'Sorry, I encountered an error while fetching cryptocurrency prices.';
+      return 'Sorry, I encountered an error while processing your request.';
     }
   }
 
-  private async getRequiredData(
-    intent: QuestionIntent,
-    symbols: string[],
-    retryCount = 0,
-    useRAG = true,
-  ): Promise<CryptoData[]> {
-    const maxRetries = 2;
-    const isHistoricalQuery =
-      intent.type === 'trend' || intent.timeframe !== 'current';
+  private async getRequiredData(intent: QuestionIntent): Promise<CryptoData[]> {
+    const results: CryptoData[] = [];
 
-    // Use RAG only for historical queries
-    if (isHistoricalQuery && useRAG) {
-      const ragResults = this.searchRAG(intent);
-      if (ragResults.length > 0) {
-        return ragResults;
-      }
-    }
-
-    const needsFunding = this.checkIfNeedsFunding(intent.type);
-
-    // Get cached data
-    const results = symbols.map((symbol) => {
-      try {
-        if (needsFunding) {
-          if (intent.type === 'funding') {
-            const funding = this.cacheService.get(
-              `funding_${symbol}`,
-              'funding',
-            ) as FundingData;
-            return funding
-              ? ({ type: 'funding', data: funding } as const)
-              : null;
-          } else {
-            const price = this.cacheService.get(
-              `price_${symbol}`,
-              'price',
-            ) as PriceData;
-            const funding = this.cacheService.get(
-              `funding_${symbol}`,
-              'funding',
-            ) as FundingData;
-            return price && funding
-              ? ({ type: 'combined', data: { price, funding } } as const)
-              : null;
-          }
-        } else {
-          const price = this.cacheService.get(
-            `price_${symbol}`,
-            'price',
-          ) as PriceData;
-          return price ? ({ type: 'price', data: price } as const) : null;
+    for (const symbol of intent.targets) {
+      switch (intent.type) {
+        case 'technical': {
+          const data = await this.getTechnicalAnalysis(symbol, intent);
+          if (data) results.push({ type: 'technical', data });
+          break;
         }
-      } catch {
-        return null;
+        case 'price': {
+          const data = await this.cryptoSupervisor.getPrice(symbol);
+          console.log('data', data);
+          results.push({ type: 'price', data });
+          break;
+        }
+        case 'funding': {
+          const data = await this.cryptoSupervisor.getFunding(symbol);
+          results.push({ type: 'funding', data });
+          break;
+        }
+        case 'comparison': {
+          const [price, funding] = await Promise.all([
+            this.cryptoSupervisor.getPrice(symbol),
+            this.cryptoSupervisor.getFunding(symbol),
+          ]);
+          results.push({
+            type: 'combined',
+            data: { price, funding },
+          });
+          break;
+        }
       }
-    });
-
-    // If we have all data from cache
-    if (!results.includes(null)) {
-      const validResults = results.filter(
-        (r): r is NonNullable<typeof r> => r !== null,
-      );
-      return validResults;
     }
 
-    // If we've retried too many times, return what we have
-    if (retryCount >= maxRetries) {
-      const validResults = results.filter(
-        (r): r is NonNullable<typeof r> => r !== null,
-      );
-      return validResults;
-    }
-
-    // Update missing data and retry
-    await this.cryptoSupervisor.batchUpdateData(symbols);
-    return this.getRequiredData(intent, symbols, retryCount + 1, useRAG);
+    return results;
   }
 
   private checkIfNeedsFunding(questionType: string): boolean {
@@ -196,15 +165,10 @@ export class CryptoService {
 
   private getCachedResponse(key: string): string | null {
     const cached = this.responseCache.get(key);
-    if (!cached) return null;
-
-    const isExpired = Date.now() - cached.timestamp > this.CACHE_TTL;
-    if (isExpired) {
-      this.responseCache.delete(key);
-      return null;
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      return cached.response;
     }
-
-    return cached.response;
+    return null;
   }
 
   private cacheResponse(key: string, response: string): void {
@@ -239,7 +203,7 @@ export class CryptoService {
     symbols: string[],
     intent: QuestionIntent,
   ): string {
-    return `${question}_${symbols.sort().join('_')}_${intent.type}`;
+    return `${question}:${symbols.join(',')}:${intent.type}:${intent.timeframe}`;
   }
 
   private formatResponse(data: CryptoData[]): string {
@@ -308,7 +272,7 @@ export class CryptoService {
       .getSupportedCoins()
       .map((coin) => `${coin.symbol.toUpperCase()}`)
       .join(', ');
-    return `Available cryptocurrencies: ${availableCoins}, and more. Please specify one.`;
+    return `Available cryptocurrencies: ${availableCoins}. Please specify one.`;
   }
 
   private async generateResponse(
@@ -316,127 +280,104 @@ export class CryptoService {
     symbols: string[],
     data: CryptoData[],
   ): Promise<string> {
-    const query = PriceQueryParser.parse(question);
-    console.log('query', query);
+    const context = this.formatDataContext(data);
+    const availableSymbols = symbols.join(', ');
 
-    if (query) {
-      const {
-        symbol,
-        date,
-        isMonth,
-        priceType,
-        type,
-        technicalType,
-        technicalPeriod,
-      } = query;
-      const { startDate, lastUpdate, isReady } =
-        this.ragManager.getDataAvailability();
+    const prompt = await this.promptTemplate.format({
+      symbols: availableSymbols,
+      context,
+      question,
+    });
 
-      if (!isReady) {
-        return 'Historical price data is being loaded. Please try again in a few minutes.';
-      }
+    const response = await this.llm.invoke(prompt);
+    return response.content as string;
+  }
 
-      if (type === 'technical') {
-        const analysis = this.ragManager.getTechnicalAnalysis(
-          symbol,
-          technicalType!,
-          technicalPeriod || 14,
-        );
-
-        if (analysis) {
-          if ('trend' in analysis) {
-            return analysis.description;
-          }
-          if ('value' in analysis) {
-            return `${symbol} ${technicalType?.toUpperCase()}: ${analysis.value.toFixed(2)} (${analysis.description})`;
-          }
-          if ('support' in analysis) {
-            return `${symbol} Support: $${analysis.support.toLocaleString()}, Resistance: $${analysis.resistance.toLocaleString()}`;
-          }
-          if ('prices' in analysis) {
-            const dateStr = new Date(
-              analysis.prices[0].timestamp,
-            ).toLocaleDateString();
-            return `The ${technicalType} of ${symbol} was $${analysis.averagePrice.toLocaleString()} on ${dateStr}`;
-          }
+  private formatDataContext(data: CryptoData[]): string {
+    return data
+      .map((item) => {
+        switch (item.type) {
+          case 'price':
+            return `${item.data.symbol}: $${item.data.averagePrice.toFixed(2)}`;
+          case 'funding':
+            return `${item.data.symbol} funding rate: ${(
+              item.data.averageRate * 100
+            ).toFixed(4)}%`;
+          case 'technical':
+            return this.formatTechnicalData(item.data);
+          case 'combined':
+            return `${item.data.price.symbol}: $${item.data.price.averagePrice.toFixed(
+              2,
+            )} (funding: ${(item.data.funding.averageRate * 100).toFixed(4)}%)`;
         }
-        return `Could not calculate ${technicalType} for ${symbol}`;
-      }
+      })
+      .join('\n');
+  }
 
-      if (type === 'date' && date) {
-        if (date > new Date()) {
-          return `I cannot provide price information for future dates. The requested date (${date.toLocaleDateString()}) is in the future.`;
-        }
+  private formatTechnicalData(data: any): string {
+    if ('trend' in data) {
+      return `Trend: ${data.trend} (strength: ${data.strength}%) - ${data.description}`;
+    }
+    if ('value' in data) {
+      return `${data.description}: ${data.value.toFixed(2)}`;
+    }
+    if ('support' in data) {
+      return `Support: $${data.support.toFixed(2)}, Resistance: $${data.resistance.toFixed(2)}`;
+    }
+    return JSON.stringify(data);
+  }
 
-        if (startDate && date < startDate) {
-          return `Historical price data for ${symbol} on ${date.toLocaleDateString()} is not available. Data is available from ${startDate.toLocaleDateString()} onwards.`;
-        }
+  private async getTechnicalAnalysis(
+    symbol: string,
+    intent: QuestionIntent,
+  ): Promise<any> {
+    const period = this.extractPeriod(intent);
+    const historicalData = await this.ragManager.getHistoricalData(
+      symbol,
+      period,
+    );
 
-        if (isMonth) {
-          if (date.getDate() === 1 && date.getMonth() === 0 && priceType) {
-            // Year query with highest/lowest
-            const price = this.ragManager.searchByYear(
-              symbol,
-              date.getFullYear(),
-              priceType,
-            );
-            if (price) {
-              const dateStr = new Date(
-                price.prices[0].timestamp,
-              ).toLocaleDateString();
-              return `The ${priceType} price of ${symbol} in ${date.getFullYear()} was $${price.averagePrice.toLocaleString()} on ${dateStr} (Data last updated: ${lastUpdate.toLocaleString()})`;
-            }
-          }
-
-          const prices = this.ragManager.searchByMonth(
-            symbol,
-            date.getFullYear(),
-            date.getMonth() + 1,
-            priceType,
-          );
-          if (prices.length > 0) {
-            if (priceType) {
-              const dateStr = new Date(
-                prices[0].prices[0].timestamp,
-              ).toLocaleDateString();
-              return `The ${priceType} price of ${symbol} in ${date.toLocaleString(
-                'default',
-                { month: 'long', year: 'numeric' },
-              )} was $${prices[0].averagePrice.toLocaleString()} on ${dateStr} (Data last updated: ${lastUpdate.toLocaleString()})`;
-            }
-            const avgPrice =
-              prices.reduce((sum, p) => sum + p.averagePrice, 0) /
-              prices.length;
-            return `The average price of ${symbol} in ${date.toLocaleString(
-              'default',
-              { month: 'long', year: 'numeric' },
-            )} was $${avgPrice.toLocaleString()} (Data last updated: ${lastUpdate.toLocaleString()})`;
-          }
-        } else {
-          const price = this.ragManager.searchByDate(symbol, date);
-          if (price) {
-            return `The price of ${symbol} on ${date.toLocaleDateString()} was $${price.averagePrice.toLocaleString()} (Data last updated: ${lastUpdate.toLocaleString()})`;
-          }
-        }
-
-        return `No price data available for ${symbol} on ${date.toLocaleDateString()}. Data might be missing for this specific date.`;
-      }
-
-      // Only use LLM for non-technical, non-date queries
-      const context = this.formatResponse(data);
-      const symbolList = symbols.join(', ').toUpperCase();
-
-      const formattedPrompt = await this.promptTemplate.format({
-        symbols: symbolList,
-        context,
-        question,
-      });
-
-      const response = await this.llm.invoke(formattedPrompt);
-      return String(response.content as string);
+    if (!historicalData || historicalData.length === 0) {
+      return null;
     }
 
-    return 'Invalid query format. Please specify a date or a price/trend query.';
+    switch (intent.action) {
+      case 'trend':
+        return this.technicalAnalysis.analyzeTrend(historicalData);
+      case 'support':
+        return this.technicalAnalysis.findSupportResistance(historicalData);
+      case 'rsi':
+        return {
+          value: this.technicalAnalysis.calculateRSI(
+            historicalData.map((d) => d.averagePrice),
+            14,
+          ),
+          description: 'RSI indicates overbought > 70, oversold < 30',
+        };
+      case 'ma':
+        return {
+          value: this.technicalAnalysis.calculateMA(
+            historicalData.map((d) => d.averagePrice),
+            period || 14,
+          ),
+          description: `${period || 14}-day Moving Average`,
+        };
+      default:
+        return null;
+    }
+  }
+
+  private extractPeriod(intent: QuestionIntent): number {
+    switch (intent.timeframe) {
+      case '7d':
+        return 7;
+      case '24h':
+        return 1;
+      case '1h':
+        return 1 / 24;
+      default:
+        return 14;
+    }
   }
 
   private parseDateQuery(question: string): DateQueryResult | null {

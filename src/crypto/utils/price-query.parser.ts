@@ -1,16 +1,5 @@
 import * as chrono from 'chrono-node';
 
-interface PriceQueryType {
-  type: 'date' | 'extremum' | 'technical';
-  symbol: string;
-  date?: Date;
-  isMonth?: boolean;
-  priceType?: 'highest' | 'lowest';
-  technicalType?: TechnicalTerm;
-  technicalPeriod?: number;
-}
-
-export type CryptoTerm = 'ath' | 'atl' | 'dip' | 'peak';
 export type TechnicalTerm =
   | 'ath'
   | 'atl'
@@ -22,66 +11,19 @@ export type TechnicalTerm =
   | 'support'
   | 'resistance';
 
+export interface PriceQueryType {
+  type: 'date' | 'extremum' | 'technical';
+  symbol: string;
+  date?: Date;
+  isMonth?: boolean;
+  priceType?: 'highest' | 'lowest';
+  technicalType?: TechnicalTerm;
+  technicalPeriod?: number;
+}
+
 export class PriceQueryParser {
-  private static readonly CRYPTO_TERMS: Record<
-    CryptoTerm,
-    { type: 'highest' | 'lowest'; description: string }
-  > = {
-    ath: { type: 'highest', description: 'All-Time High' },
-    atl: { type: 'lowest', description: 'All-Time Low' },
-    dip: { type: 'lowest', description: 'Local Low' },
-    peak: { type: 'highest', description: 'Local High' },
-  };
-
-  private static readonly TECHNICAL_TERMS: Record<
-    TechnicalTerm,
-    { type: string; description: string }
-  > = {
-    ath: { type: 'highest', description: 'All-Time High' },
-    atl: { type: 'lowest', description: 'All-Time Low' },
-    dip: { type: 'lowest', description: 'Local Low' },
-    peak: { type: 'highest', description: 'Local High' },
-    trend: { type: 'trend', description: 'Price Trend' },
-    ma: { type: 'ma', description: 'Moving Average' },
-    rsi: { type: 'rsi', description: 'Relative Strength Index' },
-    support: { type: 'support', description: 'Support Level' },
-    resistance: { type: 'resistance', description: 'Resistance Level' },
-  };
-
   static parse(question: string): PriceQueryType | null {
-    // First try to match crypto-specific terms
-    const cryptoTermMatch = this.matchCryptoTerm(question);
-    if (cryptoTermMatch) {
-      return cryptoTermMatch;
-    }
-
-    // Then try to match regular date queries
     return this.matchDateQuery(question);
-  }
-
-  private static matchCryptoTerm(question: string): PriceQueryType | null {
-    // Updated pattern to handle both crypto and technical terms
-    const termPattern = new RegExp(
-      `(?:what(?:'s| is| was)?\\s+)?(?:the\\s+)?(${Object.keys(this.TECHNICAL_TERMS).join('|')})(?:\\s+(?:of|for|price|level|analysis))?\\s*(?:of|for)?\\s*(\\w+)`,
-      'i',
-    );
-    const match = question.match(termPattern);
-    if (!match) return null;
-
-    const [, term, symbol] = match;
-    const termLower = term.toLowerCase() as TechnicalTerm;
-    const termInfo = this.TECHNICAL_TERMS[termLower];
-
-    // Extract period if specified (e.g., "14-day RSI")
-    const periodMatch = question.match(/(\d+)(?:\s*-?\s*day)/i);
-    const period = periodMatch ? parseInt(periodMatch[1], 10) : undefined;
-
-    return {
-      type: 'technical',
-      symbol: symbol.toUpperCase(),
-      technicalType: termLower,
-      technicalPeriod: period,
-    };
   }
 
   private static matchDateQuery(question: string): PriceQueryType | null {

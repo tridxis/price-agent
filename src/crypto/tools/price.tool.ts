@@ -67,7 +67,7 @@ export class PriceTool implements OnModuleInit {
         if (hyperliquidPrice)
           prices.push({
             exchange: 'Hyperliquid',
-            price: hyperliquidPrice,
+            price: Number(hyperliquidPrice),
             timestamp,
           });
 
@@ -76,8 +76,10 @@ export class PriceTool implements OnModuleInit {
           prices.push({ exchange: 'OKX', price: okxPrice, timestamp });
 
         if (prices.length > 0) {
+          const filteredPrices = prices.filter((p) => p.price > 0);
           const averagePrice =
-            prices.reduce((sum, p) => sum + p.price, 0) / prices.length;
+            filteredPrices.reduce((sum, p) => sum + p.price, 0) /
+            filteredPrices.length;
 
           const priceData: PriceData = {
             symbol,
@@ -183,7 +185,7 @@ export class PriceTool implements OnModuleInit {
     const upperSymbol = symbol.toUpperCase();
 
     // Check cache first
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+
     const cached = this.cacheService.get(`price_${upperSymbol}`, 'price');
     if (cached) return cached as unknown as PriceData;
 
