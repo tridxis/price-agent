@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
-import { CacheService } from '../cache.service';
+import { CacheService } from '../services/cache.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { ExchangePrice, PriceData } from '../types/price.type';
 

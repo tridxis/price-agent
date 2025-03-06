@@ -1,21 +1,9 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
-import { CacheService } from '../cache.service';
+import { CacheService } from '../services/cache.service';
 import { Cron, CronExpression } from '@nestjs/schedule';
-
-export interface ExchangeFunding {
-  exchange: string;
-  fundingRate: number;
-  timestamp: number;
-  nextFundingTime: number;
-}
-
-export interface FundingData {
-  symbol: string;
-  rates: ExchangeFunding[];
-  averageRate: number;
-}
+import { FundingData } from '../types/funding.type';
 
 type ExchangeMapping = {
   [key: string]: string;

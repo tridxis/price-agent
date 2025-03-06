@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { TimeframedPriceData } from './types/price.type';
+import { TimeframedPriceData } from '../shared/types/price.type';
 
 @Injectable()
 export class PricePredictionService {

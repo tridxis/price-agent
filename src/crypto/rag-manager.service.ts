@@ -1,11 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
-import { HistoricalDataService } from './historical-data.service';
-import { PathRAGTool } from './tools/path-rag.tool';
-import { CoinListService } from './coin-list.service';
+import { HistoricalDataService } from '../shared/services/historical-data.service';
+import { PathRAGTool } from '../shared/tools/path-rag.tool';
+import { CoinListService } from '../shared/services/coin-list.service';
 import { TechnicalAnalysisService } from './technical-analysis.service';
 import { TechnicalTerm } from './utils/price-query.parser';
-import { TimeframedPriceData } from './types/price.type';
+import { TimeframedPriceData } from '../shared/types/price.type';
 import { firstValueFrom } from 'rxjs';
 
 @Injectable()

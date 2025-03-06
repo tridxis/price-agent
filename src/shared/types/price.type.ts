@@ -10,6 +10,7 @@ export interface PriceData {
   prices: ExchangePrice[];
   averagePrice: number;
 }
+
 export interface TimeframedPriceData extends PriceData {
   changes: {
     '1h': number;
@@ -20,7 +21,7 @@ export interface TimeframedPriceData extends PriceData {
     '180d'?: number;
     '365d'?: number;
   };
-  date?: string; // ISO date string
+  date?: string;
   highPrice?: number;
   lowPrice?: number;
 }

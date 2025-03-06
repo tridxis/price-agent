@@ -1,6 +1,6 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
-import { FundingData } from './tools/funding.tool';
-import { PriceData } from './types/price.type';
+import { FundingData } from '../types/funding.type';
+import { PriceData } from '../types/price.type';
 
 interface CachedData {
   data: PriceData | FundingData;

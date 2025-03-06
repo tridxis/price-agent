@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
-import { CoinListService } from '../coin-list.service';
+import { CoinListService } from '../../shared/services';
 import * as chrono from 'chrono-node';
 
 export interface QuestionIntent {

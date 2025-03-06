@@ -1,9 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PriceTool } from './tools/price.tool';
-import { FundingTool, FundingData } from './tools/funding.tool';
-import { CacheService } from './cache.service';
-import { CoinListService } from './coin-list.service';
-import { PriceData } from './types/price.type';
+import { PriceTool } from '../shared/tools/price.tool';
+import { FundingTool } from '../shared/tools/funding.tool';
+import { CacheService } from '../shared/services/cache.service';
+import { CoinListService } from '../shared/services/coin-list.service';
+import { PriceData } from '../shared/types/price.type';
+import { FundingData } from '../shared/types/funding.type';
 
 @Injectable()
 export class CryptoSupervisor {

@@ -1,20 +1,19 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 /* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 import { Injectable, Logger } from '@nestjs/common';
 import { ChatOpenAI } from '@langchain/openai';
 import { PromptTemplate } from '@langchain/core/prompts';
-import { CoinListService } from './coin-list.service';
+import { CoinListService } from '../shared/services/coin-list.service';
 import { CryptoSupervisor } from './crypto.supervisor';
-import { FundingData } from './tools/funding.tool';
+import { FundingData } from '../shared/types/funding.type';
 import { NLPTool, QuestionIntent } from './tools/nlp.tool';
-import { CacheService } from './cache.service';
-import { PathRAGTool } from './tools/path-rag.tool';
+import { CacheService } from '../shared/services/cache.service';
 import { RAGManagerService } from './rag-manager.service';
-import * as chrono from 'chrono-node';
-import { PriceQueryParser } from './utils/price-query.parser';
-import { PriceData } from './types/price.type';
+import { PriceData } from '../shared/types/price.type';
 import { TechnicalAnalysisService } from './technical-analysis.service';
 import { PricePredictionService } from './price-prediction.service';
+import * as chrono from 'chrono-node';
 
 interface AIResponse {
   response: string;
@@ -42,8 +41,6 @@ export class CryptoService {
   private readonly promptTemplate: PromptTemplate;
   private readonly responseCache: Map<string, AIResponse> = new Map();
   private readonly CACHE_TTL = 30000; // 30 seconds for AI responses
-  private readonly priceRAG: PathRAGTool<PriceData>;
-  private readonly fundingRAG: PathRAGTool<FundingData>;
 
   constructor(
     private readonly cryptoSupervisor: CryptoSupervisor,
@@ -81,8 +78,6 @@ export class CryptoService {
       - Moving averages help identify trends
       - Support/resistance levels indicate key price points
     `);
-
-    this.priceRAG = this.ragManager.getPriceRAG();
   }
 
   async processQuestion(question: string): Promise<string> {
