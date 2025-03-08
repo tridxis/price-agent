@@ -10,6 +10,20 @@ import {
   TraderAnalysis,
 } from '../types/trader.type';
 
+interface TradingMetrics {
+  totalTrades: number;
+  totalVolume: number;
+  totalPnL: number;
+  winRate: number;
+  avgTradeSize: number;
+  topTradedCoins: Array<{ coin: string; volume: number }>;
+  recentPerformance: {
+    trades: number;
+    pnl: number;
+    volume: number;
+  };
+}
+
 @Injectable()
 export class TraderAnalysisService {
   private readonly logger = new Logger(TraderAnalysisService.name);
@@ -25,6 +39,78 @@ export class TraderAnalysisService {
       modelName: 'gpt-3.5-turbo',
       temperature: 0.7,
     });
+  }
+
+  private calculateTradingMetrics(fills: Fill[]): TradingMetrics {
+    const now = Date.now();
+    const dayAgo = now - 24 * 60 * 60 * 1000;
+
+    // Calculate volume and PnL by coin
+    const coinStats = fills.reduce(
+      (acc, fill) => {
+        const coin = fill.coin;
+        if (!acc[coin]) {
+          acc[coin] = { volume: 0, trades: 0 };
+        }
+        acc[coin].volume += Math.abs(parseFloat(fill.sz));
+        acc[coin].trades += 1;
+        return acc;
+      },
+      {} as Record<string, { volume: number; trades: number }>,
+    );
+
+    // Get top traded coins
+    const topTradedCoins = Object.entries(coinStats)
+      .map(([coin, stats]) => ({ coin, volume: stats.volume }))
+      .sort((a, b) => b.volume - a.volume)
+      .slice(0, 5);
+
+    // Calculate win rate and other metrics
+    const profitableTrades = fills.filter(
+      (f) => parseFloat(f.closedPnl) > 0,
+    ).length;
+    const recentFills = fills.filter((f) => f.time > dayAgo);
+
+    return {
+      totalTrades: fills.length,
+      totalVolume: fills.reduce(
+        (sum, f) => sum + Math.abs(parseFloat(f.sz)),
+        0,
+      ),
+      totalPnL: fills.reduce((sum, f) => sum + parseFloat(f.closedPnl), 0),
+      winRate: (profitableTrades / fills.length) * 100,
+      avgTradeSize:
+        fills.reduce((sum, f) => sum + Math.abs(parseFloat(f.sz)), 0) /
+        fills.length,
+      topTradedCoins,
+      recentPerformance: {
+        trades: recentFills.length,
+        pnl: recentFills.reduce((sum, f) => sum + parseFloat(f.closedPnl), 0),
+        volume: recentFills.reduce(
+          (sum, f) => sum + Math.abs(parseFloat(f.sz)),
+          0,
+        ),
+      },
+    };
+  }
+
+  private formatPositionData(accountSummary: AccountSummary): string {
+    return accountSummary.assetPositions
+      .map((p) => {
+        const pos = p.position;
+        const risk =
+          (parseFloat(pos.marginUsed) /
+            parseFloat(accountSummary.marginSummary.accountValue)) *
+          100;
+        return `
+          ${pos.coin}:
+          - Size: ${pos.szi} (${risk.toFixed(2)}% of account)
+          - Entry: ${pos.entryPx}
+          - Leverage: ${pos.leverage.value}x (${pos.leverage.type})
+          - PnL: ${pos.unrealizedPnl} (ROE: ${pos.returnOnEquity}%)
+          - Liquidation Price: ${pos.liquidationPx}`;
+      })
+      .join('\n');
   }
 
   async analyzeTrader(address: string): Promise<TraderAnalysis> {
@@ -89,53 +175,49 @@ export class TraderAnalysisService {
     fills: Fill[],
     openOrders: OpenOrder[],
   ): Promise<string> {
+    const metrics = this.calculateTradingMetrics(fills);
+    const positions = this.formatPositionData(accountSummary);
+
     const prompt = `
       Analyze this trader's activity and risk management based on the following data:
 
-      Account Summary:
+      Account Overview:
       - Total Account Value: ${accountSummary.marginSummary.accountValue} USD
       - Total Position Value: ${accountSummary.marginSummary.totalNtlPos} USD
-      - Margin Used: ${accountSummary.marginSummary.totalMarginUsed} USD
+      - Margin Utilization: ${((parseFloat(accountSummary.marginSummary.totalMarginUsed) / parseFloat(accountSummary.marginSummary.accountValue)) * 100).toFixed(2)}%
+
+      Trading Performance:
+      - Total Trades: ${metrics.totalTrades}
+      - Win Rate: ${metrics.winRate.toFixed(2)}%
+      - Total PnL: ${metrics.totalPnL.toFixed(2)} USD
+      - Average Trade Size: ${metrics.avgTradeSize.toFixed(2)} USD
       
-      Active Positions:
-      ${accountSummary.assetPositions
-        .map(
-          (p) => `
-        - ${p.position.coin}: Size ${p.position.szi}, Entry ${p.position.entryPx}
-        - Leverage: ${p.position.leverage.value}x (${p.position.leverage.type})
-        - Unrealized PnL: ${p.position.unrealizedPnl}
-        - ROE: ${p.position.returnOnEquity}
-      `,
-        )
-        .join('\n')}
+      Last 24h Performance:
+      - Trades: ${metrics.recentPerformance.trades}
+      - PnL: ${metrics.recentPerformance.pnl.toFixed(2)} USD
+      - Volume: ${metrics.recentPerformance.volume.toFixed(2)} USD
 
-      Recent Trading Activity (Last ${fills.length} trades):
-      ${fills
-        .slice(0, 5)
-        .map(
-          (f) => `
-        - ${f.dir} ${f.coin} | Size: ${f.sz} | Price: ${f.px}
-        - PnL: ${f.closedPnl} | Time: ${new Date(f.time).toISOString()}
-      `,
-        )
-        .join('\n')}
+      Most Traded Assets:
+      ${metrics.topTradedCoins.map((c) => `- ${c.coin}: ${c.volume.toFixed(2)} USD volume`).join('\n')}
 
-      Current Open Orders:
+      Current Positions:
+      ${positions}
+
+      Open Orders:
       ${openOrders
         .map(
-          (o) => `
-        - ${o.side === 'B' ? 'Buy' : 'Sell'} ${o.coin} | Size: ${o.sz} | Price: ${o.limitPx}
-      `,
+          (o) =>
+            `- ${o.side === 'B' ? 'Buy' : 'Sell'} ${o.coin}: ${o.sz} @ ${o.limitPx}`,
         )
         .join('\n')}
 
       Please provide a comprehensive analysis of:
-      1. Trading style and patterns
-      2. Risk management approach
-      3. Position sizing and leverage usage
-      4. Recent performance and profitability
-      5. Notable strengths or concerns
-      
+      1. Trading style and risk management approach
+      2. Position sizing and leverage usage patterns
+      3. Recent performance and market timing
+      4. Notable strengths and potential risks
+      5. Overall trading sophistication level
+
       Keep the analysis concise but informative.
     `;
 
