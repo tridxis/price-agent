@@ -66,10 +66,20 @@ export interface OpenOrder {
   timestamp: number;
 }
 
+export interface Trade {
+  coin: string;
+  side: string;
+  totalSize: number;
+  avgPrice: number;
+  closedPnl?: number;
+  time: number;
+  fills: Fill[];
+}
+
 export interface TraderAnalysis {
   address: string;
   accountSummary: AccountSummary;
-  recentFills: Fill[];
+  recentTrades: Trade[];
   openOrders: OpenOrder[];
   analysis: string;
 }

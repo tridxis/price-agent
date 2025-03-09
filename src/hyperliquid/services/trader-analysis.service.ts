@@ -109,12 +109,9 @@ export class TraderAnalysisService {
     return trades.sort((a, b) => b.time - a.time);
   }
 
-  private calculateTradingMetrics(fills: Fill[]): TradingMetrics {
+  private calculateTradingMetrics(trades: Trade[]): TradingMetrics {
     const now = Date.now();
     const dayAgo = now - 24 * 60 * 60 * 1000;
-
-    // Combine fills into trades
-    const trades = this.combineFillsToTrades(fills);
 
     // Filter closed trades
     const closedTrades = trades.filter((t) => t.closedPnl !== undefined);
@@ -211,16 +208,19 @@ export class TraderAnalysisService {
         this.getOpenOrders(address),
       ]);
 
+      // Combine fills into trades
+      const trades = this.combineFillsToTrades(fills);
+
       const analysis = await this.generateAnalysis(
         accountSummary,
-        fills,
+        trades,
         openOrders,
       );
 
       return {
         address,
         accountSummary,
-        recentFills: fills,
+        recentTrades: trades,
         openOrders,
         analysis,
       };
@@ -262,10 +262,10 @@ export class TraderAnalysisService {
 
   private async generateAnalysis(
     accountSummary: AccountSummary,
-    fills: Fill[],
+    trades: Trade[],
     openOrders: OpenOrder[],
   ): Promise<string> {
-    const metrics = this.calculateTradingMetrics(fills);
+    const metrics = this.calculateTradingMetrics(trades);
     const positions = this.formatPositionData(accountSummary);
 
     const prompt = `
@@ -288,7 +288,12 @@ export class TraderAnalysisService {
       - Volume: ${metrics.recentPerformance.volume.toFixed(2)} USD
 
       Most Traded Assets:
-      ${metrics.topTradedCoins.map((c) => `- ${c.coin}: ${c.volume.toFixed(2)} USD volume`).join('\n')}
+      ${metrics.topTradedCoins
+        .map(
+          (c) =>
+            `- ${c.coin}: ${c.volume.toFixed(2)} USD volume, ${c.trades} trades, ${c.pnl.toFixed(2)} USD PnL`,
+        )
+        .join('\n')}
 
       Current Positions:
       ${positions}
