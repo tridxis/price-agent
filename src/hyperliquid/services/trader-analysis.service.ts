@@ -13,15 +13,31 @@ import {
 interface TradingMetrics {
   totalTrades: number;
   totalVolume: number;
-  totalPnL: number;
+  totalClosedPnL: number;
   winRate: number;
   avgTradeSize: number;
-  topTradedCoins: Array<{ coin: string; volume: number }>;
-  recentPerformance: {
+  topTradedCoins: Array<{
+    coin: string;
+    volume: number;
     trades: number;
     pnl: number;
+  }>;
+  recentPerformance: {
+    trades: number;
+    closedTrades: number;
+    closedPnl: number;
     volume: number;
   };
+}
+
+interface Trade {
+  coin: string;
+  side: string;
+  totalSize: number;
+  avgPrice: number;
+  closedPnl?: number;
+  time: number;
+  fills: Fill[];
 }
 
 @Injectable()
@@ -41,55 +57,129 @@ export class TraderAnalysisService {
     });
   }
 
+  private combineFillsToTrades(fills: Fill[]): Trade[] {
+    // Sort fills by time to group them properly
+    const sortedFills = [...fills].sort((a, b) => a.time - b.time);
+
+    // Group fills by coin + side + hasClosedPnl
+    const tradeGroups = new Map<string, Fill[]>();
+
+    for (const fill of sortedFills) {
+      const hasClosedPnl =
+        fill.closedPnl !== undefined && fill.closedPnl !== null;
+      const key = `${fill.coin}-${fill.side}-${hasClosedPnl}`;
+
+      if (!tradeGroups.has(key)) {
+        tradeGroups.set(key, []);
+      }
+      tradeGroups.get(key)?.push(fill);
+    }
+
+    // Convert groups to trades
+    const trades: Trade[] = [];
+
+    for (const fills of tradeGroups.values()) {
+      if (fills.length === 0) continue;
+
+      const firstFill = fills[0];
+      const totalSize = fills.reduce(
+        (sum, f) => sum + Math.abs(parseFloat(f.sz)),
+        0,
+      );
+      const weightedPrice = fills.reduce(
+        (sum, f) => sum + Math.abs(parseFloat(f.sz)) * parseFloat(f.px),
+        0,
+      );
+
+      trades.push({
+        coin: firstFill.coin,
+        side: firstFill.side,
+        totalSize,
+        avgPrice: weightedPrice / totalSize,
+        closedPnl:
+          firstFill.closedPnl !== undefined
+            ? fills.reduce((sum, f) => sum + parseFloat(f.closedPnl || '0'), 0)
+            : undefined,
+        time: firstFill.time,
+        fills: fills,
+      });
+    }
+
+    // Sort trades by time
+    return trades.sort((a, b) => b.time - a.time);
+  }
+
   private calculateTradingMetrics(fills: Fill[]): TradingMetrics {
     const now = Date.now();
     const dayAgo = now - 24 * 60 * 60 * 1000;
 
+    // Combine fills into trades
+    const trades = this.combineFillsToTrades(fills);
+
+    // Filter closed trades
+    const closedTrades = trades.filter((t) => t.closedPnl !== undefined);
+
     // Calculate volume and PnL by coin
-    const coinStats = fills.reduce(
-      (acc, fill) => {
-        const coin = fill.coin;
+    const coinStats = trades.reduce(
+      (acc, trade) => {
+        const coin = trade.coin;
         if (!acc[coin]) {
-          acc[coin] = { volume: 0, trades: 0 };
+          acc[coin] = { volume: 0, trades: 0, closedPnl: 0 };
         }
-        acc[coin].volume += Math.abs(parseFloat(fill.sz));
+        acc[coin].volume += trade.totalSize;
         acc[coin].trades += 1;
+        if (trade.closedPnl) {
+          acc[coin].closedPnl += trade.closedPnl;
+        }
         return acc;
       },
-      {} as Record<string, { volume: number; trades: number }>,
+      {} as Record<
+        string,
+        { volume: number; trades: number; closedPnl: number }
+      >,
     );
 
-    // Get top traded coins
-    const topTradedCoins = Object.entries(coinStats)
-      .map(([coin, stats]) => ({ coin, volume: stats.volume }))
-      .sort((a, b) => b.volume - a.volume)
-      .slice(0, 5);
-
-    // Calculate win rate and other metrics
-    const profitableTrades = fills.filter(
-      (f) => parseFloat(f.closedPnl) > 0,
+    // Rest of the metrics calculation using trades instead of fills
+    const profitableTrades = closedTrades.filter(
+      (t) => (t.closedPnl || 0) >= 0,
     ).length;
-    const recentFills = fills.filter((f) => f.time > dayAgo);
+    const winRate =
+      closedTrades.length > 0
+        ? (profitableTrades / closedTrades.length) * 100
+        : 0;
+
+    const recentTrades = trades.filter((t) => t.time > dayAgo);
+    const recentClosedTrades = recentTrades.filter(
+      (t) => t.closedPnl !== undefined,
+    );
 
     return {
-      totalTrades: fills.length,
-      totalVolume: fills.reduce(
-        (sum, f) => sum + Math.abs(parseFloat(f.sz)),
+      totalTrades: trades.length,
+      totalVolume: trades.reduce((sum, t) => sum + t.totalSize, 0),
+      totalClosedPnL: closedTrades.reduce(
+        (sum, t) => sum + (t.closedPnl || 0),
         0,
       ),
-      totalPnL: fills.reduce((sum, f) => sum + parseFloat(f.closedPnl), 0),
-      winRate: (profitableTrades / fills.length) * 100,
+      winRate,
       avgTradeSize:
-        fills.reduce((sum, f) => sum + Math.abs(parseFloat(f.sz)), 0) /
-        fills.length,
-      topTradedCoins,
+        trades.reduce((sum, t) => sum + t.totalSize, 0) / trades.length,
+      topTradedCoins: Object.entries(coinStats)
+        .map(([coin, stats]) => ({
+          coin,
+          volume: stats.volume,
+          trades: stats.trades,
+          pnl: stats.closedPnl,
+        }))
+        .sort((a, b) => b.volume - a.volume)
+        .slice(0, 5),
       recentPerformance: {
-        trades: recentFills.length,
-        pnl: recentFills.reduce((sum, f) => sum + parseFloat(f.closedPnl), 0),
-        volume: recentFills.reduce(
-          (sum, f) => sum + Math.abs(parseFloat(f.sz)),
+        trades: recentTrades.length,
+        closedTrades: recentClosedTrades.length,
+        closedPnl: recentClosedTrades.reduce(
+          (sum, t) => sum + (t.closedPnl || 0),
           0,
         ),
+        volume: recentTrades.reduce((sum, t) => sum + t.totalSize, 0),
       },
     };
   }
@@ -189,12 +279,12 @@ export class TraderAnalysisService {
       Trading Performance:
       - Total Trades: ${metrics.totalTrades}
       - Win Rate: ${metrics.winRate.toFixed(2)}%
-      - Total PnL: ${metrics.totalPnL.toFixed(2)} USD
+      - Total PnL: ${metrics.totalClosedPnL.toFixed(2)} USD
       - Average Trade Size: ${metrics.avgTradeSize.toFixed(2)} USD
       
       Last 24h Performance:
       - Trades: ${metrics.recentPerformance.trades}
-      - PnL: ${metrics.recentPerformance.pnl.toFixed(2)} USD
+      - PnL: ${metrics.recentPerformance.closedPnl.toFixed(2)} USD
       - Volume: ${metrics.recentPerformance.volume.toFixed(2)} USD
 
       Most Traded Assets:
