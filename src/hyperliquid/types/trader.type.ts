@@ -73,7 +73,7 @@ export interface Trade {
   avgPrice: number;
   closedPnl?: number;
   time: number;
-  fills: Fill[];
+  // fills: Fill[];
 }
 
 export interface TraderAnalysis {

@@ -37,7 +37,7 @@ interface Trade {
   avgPrice: number;
   closedPnl?: number;
   time: number;
-  fills: Fill[];
+  // fills: Fill[];
 }
 
 @Injectable()
@@ -61,13 +61,13 @@ export class TraderAnalysisService {
     // Sort fills by time to group them properly
     const sortedFills = [...fills].sort((a, b) => a.time - b.time);
 
-    // Group fills by coin + side + hasClosedPnl
+    // Group fills by coin + dir + hasClosedPnl
     const tradeGroups = new Map<string, Fill[]>();
 
     for (const fill of sortedFills) {
       const hasClosedPnl =
         fill.closedPnl !== undefined && fill.closedPnl !== null;
-      const key = `${fill.coin}-${fill.side}-${hasClosedPnl}`;
+      const key = `${fill.coin}-${fill.dir}-${hasClosedPnl}`;
 
       if (!tradeGroups.has(key)) {
         tradeGroups.set(key, []);
@@ -93,7 +93,7 @@ export class TraderAnalysisService {
 
       trades.push({
         coin: firstFill.coin,
-        side: firstFill.side,
+        side: firstFill.dir,
         totalSize,
         avgPrice: weightedPrice / totalSize,
         closedPnl:
@@ -101,7 +101,7 @@ export class TraderAnalysisService {
             ? fills.reduce((sum, f) => sum + parseFloat(f.closedPnl || '0'), 0)
             : undefined,
         time: firstFill.time,
-        fills: fills,
+        // fills: fills,
       });
     }
 
@@ -268,6 +268,15 @@ export class TraderAnalysisService {
     const metrics = this.calculateTradingMetrics(trades);
     const positions = this.formatPositionData(accountSummary);
 
+    // Format trades with minimal fields
+    const formattedTrades = trades.map((t) => ({
+      sz: t.totalSize.toFixed(3),
+      px: t.avgPrice.toFixed(2),
+      pnl: t.closedPnl?.toFixed(2) ?? '',
+      dir: t.side,
+      t: new Date(t.time).toISOString(),
+    }));
+
     const prompt = `
       Analyze this trader's activity and risk management based on the following data:
 
@@ -306,9 +315,16 @@ export class TraderAnalysisService {
         )
         .join('\n')}
 
+      All Trades (sz=size, px=price, pnl=realized PnL, dir=direction, t=timestamp):
+      ${formattedTrades
+        .map(
+          (t) => `${t.t} | ${t.dir} | sz:${t.sz} | px:${t.px} | pnl:${t.pnl}`,
+        )
+        .join('\n')}
+
       Please provide a comprehensive analysis of:
       1. Trading style and risk management approach
-      2. Position sizing and leverage usage patterns
+      2. Position sizing and leverage usage patterns (Only for current positions)
       3. Recent performance and market timing
       4. Notable strengths and potential risks
       5. Overall trading sophistication level
