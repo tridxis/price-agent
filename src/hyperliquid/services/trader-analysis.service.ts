@@ -9,6 +9,8 @@ import {
   OpenOrder,
   TraderAnalysis,
 } from '../types/trader.type';
+import { LeaderboardService } from './leaderboard.service';
+import { LeaderboardRow } from '../types/leaderboard.type';
 
 interface TradingMetrics {
   totalTrades: number;
@@ -49,10 +51,11 @@ export class TraderAnalysisService {
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
+    private readonly leaderboardService: LeaderboardService,
   ) {
     this.llm = new ChatOpenAI({
       openAIApiKey: this.configService.get<string>('OPENAI_API_KEY'),
-      modelName: 'gpt-3.5-turbo',
+      modelName: 'gpt-4o-mini',
       temperature: 0.7,
     });
   }
@@ -200,6 +203,19 @@ export class TraderAnalysisService {
       .join('\n');
   }
 
+  private formatPerformanceData(trader: LeaderboardRow): string {
+    return trader.windowPerformances
+      .map(([window, perf]) => {
+        const windowName = window.charAt(0).toUpperCase() + window.slice(1);
+        return `
+        ${windowName} Performance:
+        - PnL: ${perf.pnl} USD
+        - ROI: ${(parseFloat(perf.roi) * 100).toFixed(2)}%
+        - Volume: ${perf.vlm} USD`;
+      })
+      .join('\n');
+  }
+
   async analyzeTrader(address: string): Promise<TraderAnalysis> {
     try {
       const [accountSummary, fills, openOrders] = await Promise.all([
@@ -212,6 +228,7 @@ export class TraderAnalysisService {
       const trades = this.combineFillsToTrades(fills);
 
       const analysis = await this.generateAnalysis(
+        address,
         accountSummary,
         trades,
         openOrders,
@@ -261,12 +278,19 @@ export class TraderAnalysisService {
   }
 
   private async generateAnalysis(
+    address: string,
     accountSummary: AccountSummary,
     trades: Trade[],
     openOrders: OpenOrder[],
   ): Promise<string> {
     const metrics = this.calculateTradingMetrics(trades);
     const positions = this.formatPositionData(accountSummary);
+
+    // Get leaderboard data for this trader
+    const trader = this.leaderboardService.getTraderByAddress(address);
+    const performanceData = trader
+      ? this.formatPerformanceData(trader)
+      : undefined;
 
     // Format trades with minimal fields
     const formattedTrades = trades.map((t) => ({
@@ -285,7 +309,11 @@ export class TraderAnalysisService {
       - Total Position Value: ${accountSummary.marginSummary.totalNtlPos} USD
       - Margin Utilization: ${((parseFloat(accountSummary.marginSummary.totalMarginUsed) / parseFloat(accountSummary.marginSummary.accountValue)) * 100).toFixed(2)}%
 
-      Trading Performance:
+      Performance Summary:
+      ${
+        performanceData
+          ? performanceData
+          : `
       - Total Trades: ${metrics.totalTrades}
       - Win Rate: ${metrics.winRate.toFixed(2)}%
       - Total PnL: ${metrics.totalClosedPnL.toFixed(2)} USD
@@ -295,6 +323,8 @@ export class TraderAnalysisService {
       - Trades: ${metrics.recentPerformance.trades}
       - PnL: ${metrics.recentPerformance.closedPnl.toFixed(2)} USD
       - Volume: ${metrics.recentPerformance.volume.toFixed(2)} USD
+        `
+      }
 
       Most Traded Assets:
       ${metrics.topTradedCoins
@@ -324,8 +354,8 @@ export class TraderAnalysisService {
 
       Please provide a comprehensive analysis of:
       1. Trading style and risk management approach
-      2. Position sizing and leverage usage patterns (Only for current positions)
-      3. Recent performance and market timing
+      2. Position sizing and leverage usage patterns
+      3. Performance trends across different timeframes
       4. Notable strengths and potential risks
       5. Overall trading sophistication level
 
