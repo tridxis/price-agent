@@ -242,9 +242,9 @@ export class TraderAnalysisService {
         const windowName = window.charAt(0).toUpperCase() + window.slice(1);
         return `
         ${windowName} Performance:
-        - PnL: ${perf.pnl} USD
+        - PnL: $${Number(perf.pnl).toFixed(2)}
         - ROI: ${(parseFloat(perf.roi) * 100).toFixed(2)}%
-        - Volume: ${perf.vlm} USD`;
+        - Vol: $${Number(perf.vlm).toFixed(2)}`;
       })
       .join('\n');
   }
@@ -358,9 +358,9 @@ export class TraderAnalysisService {
       Analyze this trader's activity and risk management based on the following data:
 
       Account Overview:
-      - Total Account Value: ${accountSummary.marginSummary.accountValue} USD
-      - Total Position Value: ${accountSummary.marginSummary.totalNtlPos} USD
-      - Margin Utilization: ${((parseFloat(accountSummary.marginSummary.totalMarginUsed) / parseFloat(accountSummary.marginSummary.accountValue)) * 100).toFixed(2)}%
+      - Account Value: $${Number(accountSummary.marginSummary.accountValue).toFixed(2)}
+      - Position Value: $${Number(accountSummary.marginSummary.totalNtlPos).toFixed(2)}
+      - Margin Usage: ${((parseFloat(accountSummary.marginSummary.totalMarginUsed) / parseFloat(accountSummary.marginSummary.accountValue)) * 100).toFixed(2)}%
 
       Performance Summary:
       ${
@@ -369,23 +369,21 @@ export class TraderAnalysisService {
           : `
       - Total Trades: ${metrics.totalTrades}
       - Win Rate: ${metrics.winRate.toFixed(2)}%
-      - Total PnL: ${metrics.totalClosedPnL.toFixed(2)} USD
-      - Average Trade Size: ${metrics.avgTradeSize.toFixed(2)} USD
+      - Total PnL: $${metrics.totalClosedPnL.toFixed(2)}
+      - Avg Trade Size: $${metrics.avgTradeSize.toFixed(2)}
       
-      Last 24h Performance:
+      Last 24h:
       - Trades: ${metrics.recentPerformance.trades}
-      - PnL: ${metrics.recentPerformance.closedPnl.toFixed(2)} USD
-      - Volume: ${metrics.recentPerformance.volume.toFixed(2)} USD
+      - PnL: $${metrics.recentPerformance.closedPnl.toFixed(2)}
+      - Vol: $${metrics.recentPerformance.volume.toFixed(2)}
       `
       }
 
-      Most Traded Assets:
+      Most Traded:
       ${metrics.topTradedCoins
         .map((c) => {
           const currentPrice = prices.get(c.coin.toUpperCase()) || 0;
-          return `- ${c.coin}: ${c.volume.toFixed(2)} USD volume, ${
-            c.trades
-          } trades, ${c.pnl.toFixed(2)} USD PnL (Current: ${Number(currentPrice).toFixed(2)} USD)`;
+          return `- ${c.coin}: $${c.volume.toFixed(2)} vol, ${c.trades} trades, $${c.pnl.toFixed(2)} PnL (Now: $${Number(currentPrice).toFixed(2)})`;
         })
         .join('\n')}
 
@@ -400,9 +398,7 @@ export class TraderAnalysisService {
             currentPrice > 0
               ? ((parseFloat(o.limitPx) - currentPrice) / currentPrice) * 100
               : 0;
-          return `- ${o.side === 'B' ? 'Buy' : 'Sell'} ${
-            o.coin
-          }: ${o.sz} @ ${o.limitPx} (${deviation >= 0 ? '+' : ''}${deviation.toFixed(2)}% from current)`;
+          return `- ${o.side === 'B' ? 'Buy' : 'Sell'} ${o.coin}: ${o.sz} @ $${Number(o.limitPx).toFixed(2)} (${deviation >= 0 ? '+' : ''}${deviation.toFixed(2)}% from current)`;
         })
         .join('\n')}
 
@@ -414,14 +410,14 @@ export class TraderAnalysisService {
         )
         .join('\n')}
 
-      Please provide a comprehensive analysis of:
-      1. Trading style and risk management approach
-      2. Position sizing and leverage usage patterns
-      3. Performance trends across different timeframes
-      4. Notable strengths and potential risks
-      5. Overall trading sophistication level
+      Please analyze:
+      1. Trading style and risk management
+      2. Position sizing and leverage usage
+      3. Performance trends across timeframes
+      4. Notable strengths and risks
+      5. Overall sophistication level
 
-      Keep the analysis concise but informative.
+      Keep it concise but informative.
     `;
 
     const response = await this.llm.invoke(prompt);
