@@ -184,18 +184,51 @@ export class TraderAnalysisService {
     };
   }
 
-  private formatPositionData(accountSummary: AccountSummary): string {
+  private async getCurrentPrices(
+    coins: string[],
+  ): Promise<Map<string, number>> {
+    try {
+      const response = await firstValueFrom(
+        this.httpService.post<Record<string, number>>(
+          this.API_URL,
+          { type: 'allMids' },
+          {
+            headers: { 'Content-Type': 'application/json' },
+          },
+        ),
+      );
+
+      return new Map(Object.entries(response.data));
+    } catch (error) {
+      this.logger.error('Failed to fetch current prices:', error);
+      return new Map();
+    }
+  }
+
+  private formatPositionData(
+    accountSummary: AccountSummary,
+    prices: Map<string, number>,
+  ): string {
     return accountSummary.assetPositions
       .map((p) => {
         const pos = p.position;
+        const currentPrice = prices.get(pos.coin.toUpperCase()) || 0;
         const risk =
           (parseFloat(pos.marginUsed) /
             parseFloat(accountSummary.marginSummary.accountValue)) *
           100;
+        const priceChange =
+          currentPrice > 0
+            ? ((currentPrice - parseFloat(pos.entryPx)) /
+                parseFloat(pos.entryPx)) *
+              100
+            : 0;
+
         return `
           ${pos.coin}:
           - Size: ${pos.szi} (${risk.toFixed(2)}% of account)
           - Entry: ${pos.entryPx}
+          - Current: ${Number(currentPrice).toFixed(2)} (${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%)
           - Leverage: ${pos.leverage.value}x (${pos.leverage.type})
           - PnL: ${pos.unrealizedPnl} (ROE: ${pos.returnOnEquity}%)
           - Liquidation Price: ${pos.liquidationPx}`;
@@ -254,7 +287,7 @@ export class TraderAnalysisService {
         user: address,
       }),
     );
-    return response.data;
+    return response.data as AccountSummary;
   }
 
   private async getRecentFills(address: string): Promise<Fill[]> {
@@ -264,7 +297,7 @@ export class TraderAnalysisService {
         user: address,
       }),
     );
-    return response.data;
+    return response.data as Fill[];
   }
 
   private async getOpenOrders(address: string): Promise<OpenOrder[]> {
@@ -274,7 +307,7 @@ export class TraderAnalysisService {
         user: address,
       }),
     );
-    return response.data;
+    return response.data as OpenOrder[];
   }
 
   private async generateAnalysis(
@@ -284,7 +317,17 @@ export class TraderAnalysisService {
     openOrders: OpenOrder[],
   ): Promise<string> {
     const metrics = this.calculateTradingMetrics(trades);
-    const positions = this.formatPositionData(accountSummary);
+
+    // Get unique coins from positions, trades, and orders
+    const uniqueCoins = new Set([
+      ...accountSummary.assetPositions.map((p) => p.position.coin),
+      ...trades.map((t) => t.coin),
+      ...openOrders.map((o) => o.coin),
+    ]);
+
+    // Fetch current prices for all relevant coins
+    const prices = await this.getCurrentPrices(Array.from(uniqueCoins));
+    const positions = this.formatPositionData(accountSummary, prices);
 
     // Get leaderboard data for this trader
     const trader = this.leaderboardService.getTraderByAddress(address);
@@ -292,14 +335,24 @@ export class TraderAnalysisService {
       ? this.formatPerformanceData(trader)
       : undefined;
 
-    // Format trades with minimal fields
-    const formattedTrades = trades.map((t) => ({
-      sz: t.totalSize.toFixed(3),
-      px: t.avgPrice.toFixed(2),
-      pnl: t.closedPnl?.toFixed(2) ?? '',
-      dir: t.side,
-      t: new Date(t.time).toISOString(),
-    }));
+    // Format trades with minimal fields and include price impact
+    const formattedTrades = trades.map((t) => {
+      const currentPrice = prices.get(t.coin.toUpperCase()) || 0;
+      const priceChange =
+        currentPrice > 0 ? ((currentPrice - t.avgPrice) / t.avgPrice) * 100 : 0;
+
+      return {
+        sz: t.totalSize.toFixed(3),
+        px: t.avgPrice.toFixed(2),
+        curr:
+          currentPrice > 0
+            ? `${Number(currentPrice).toFixed(2)} (${priceChange >= 0 ? '+' : ''}${priceChange.toFixed(2)}%)`
+            : 'N/A',
+        pnl: t.closedPnl?.toFixed(2) ?? '',
+        dir: t.side,
+        t: new Date(t.time).toISOString(),
+      };
+    });
 
     const prompt = `
       Analyze this trader's activity and risk management based on the following data:
@@ -323,15 +376,17 @@ export class TraderAnalysisService {
       - Trades: ${metrics.recentPerformance.trades}
       - PnL: ${metrics.recentPerformance.closedPnl.toFixed(2)} USD
       - Volume: ${metrics.recentPerformance.volume.toFixed(2)} USD
-        `
+      `
       }
 
       Most Traded Assets:
       ${metrics.topTradedCoins
-        .map(
-          (c) =>
-            `- ${c.coin}: ${c.volume.toFixed(2)} USD volume, ${c.trades} trades, ${c.pnl.toFixed(2)} USD PnL`,
-        )
+        .map((c) => {
+          const currentPrice = prices.get(c.coin.toUpperCase()) || 0;
+          return `- ${c.coin}: ${c.volume.toFixed(2)} USD volume, ${
+            c.trades
+          } trades, ${c.pnl.toFixed(2)} USD PnL (Current: ${Number(currentPrice).toFixed(2)} USD)`;
+        })
         .join('\n')}
 
       Current Positions:
@@ -339,16 +394,23 @@ export class TraderAnalysisService {
 
       Open Orders:
       ${openOrders
-        .map(
-          (o) =>
-            `- ${o.side === 'B' ? 'Buy' : 'Sell'} ${o.coin}: ${o.sz} @ ${o.limitPx}`,
-        )
+        .map((o) => {
+          const currentPrice = prices.get(o.coin.toUpperCase()) || 0;
+          const deviation =
+            currentPrice > 0
+              ? ((parseFloat(o.limitPx) - currentPrice) / currentPrice) * 100
+              : 0;
+          return `- ${o.side === 'B' ? 'Buy' : 'Sell'} ${
+            o.coin
+          }: ${o.sz} @ ${o.limitPx} (${deviation >= 0 ? '+' : ''}${deviation.toFixed(2)}% from current)`;
+        })
         .join('\n')}
 
-      All Trades (sz=size, px=price, pnl=realized PnL, dir=direction, t=timestamp):
+      All Trades (sz=size, px=entry price, curr=current price, pnl=realized PnL, dir=direction, t=timestamp):
       ${formattedTrades
         .map(
-          (t) => `${t.t} | ${t.dir} | sz:${t.sz} | px:${t.px} | pnl:${t.pnl}`,
+          (t) =>
+            `${t.t} | ${t.dir} | sz:${t.sz} | px:${t.px} | curr:${t.curr} | pnl:${t.pnl}`,
         )
         .join('\n')}
 
