@@ -14,7 +14,7 @@ type HyperliquidResponse = [
   [string, { fundingRate: string; nextFundingTime: number }][],
 ][];
 
-@Injectable()
+// @Injectable()
 export class FundingTool implements OnModuleInit {
   private readonly logger = new Logger(FundingTool.name);
   private readonly HYPERLIQUID_API = 'https://api-ui.hyperliquid.xyz/info';

@@ -9,7 +9,7 @@ interface HyperliquidResponse {
   [key: string]: number;
 }
 
-@Injectable()
+// @Injectable()
 export class PriceTool implements OnModuleInit {
   private readonly logger = new Logger(PriceTool.name);
   private readonly BINANCE_API = 'https://fapi.binance.com/fapi/v1';

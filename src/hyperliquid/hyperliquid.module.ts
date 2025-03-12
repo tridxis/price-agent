@@ -5,9 +5,10 @@ import { LeaderboardService } from './services/leaderboard.service';
 import { LeaderboardSyncJob } from './jobs/leaderboard-sync.job';
 import { TraderAnalysisService } from './services/trader-analysis.service';
 import { TraderController } from './controllers/trader.controller';
+import { SharedModule } from 'src/shared';
 
 @Module({
-  imports: [HttpModule, ConfigModule],
+  imports: [HttpModule, ConfigModule, SharedModule],
   controllers: [TraderController],
   providers: [LeaderboardService, LeaderboardSyncJob, TraderAnalysisService],
   exports: [LeaderboardService, TraderAnalysisService],

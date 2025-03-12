@@ -11,6 +11,9 @@ import {
 } from '../types/trader.type';
 import { LeaderboardService } from './leaderboard.service';
 import { LeaderboardRow } from '../types/leaderboard.type';
+import { HistoricalDataService } from '../../shared/services/historical-data.service';
+import { Candle } from 'src/shared';
+import { Cron, CronExpression } from '@nestjs/schedule';
 
 interface TradingMetrics {
   totalTrades: number;
@@ -42,16 +45,38 @@ interface Trade {
   // fills: Fill[];
 }
 
+interface OrderAnalysis {
+  deviation: number;
+  rsi: number;
+  macd: {
+    value: number;
+    signal: number;
+    histogram: number;
+  };
+  nearestSupport: number;
+  nearestResistance: number;
+  recommendation: 'strong' | 'moderate' | 'weak' | 'risky';
+}
+
 @Injectable()
 export class TraderAnalysisService {
   private readonly logger = new Logger(TraderAnalysisService.name);
   private readonly API_URL = 'https://api.hyperliquid.xyz/info';
   private readonly llm: ChatOpenAI;
+  private readonly candleCache: Map<
+    string,
+    {
+      data: Candle[];
+      timestamp: number;
+    }
+  > = new Map();
+  private readonly CANDLE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
   constructor(
     private readonly httpService: HttpService,
     private readonly configService: ConfigService,
     private readonly leaderboardService: LeaderboardService,
+    private readonly historicalDataService: HistoricalDataService,
   ) {
     this.llm = new ChatOpenAI({
       openAIApiKey: this.configService.get<string>('OPENAI_API_KEY'),
@@ -184,9 +209,7 @@ export class TraderAnalysisService {
     };
   }
 
-  private async getCurrentPrices(
-    coins: string[],
-  ): Promise<Map<string, number>> {
+  private async getCurrentPrices(): Promise<Map<string, number>> {
     try {
       const response = await firstValueFrom(
         this.httpService.post<Record<string, number>>(
@@ -310,24 +333,249 @@ export class TraderAnalysisService {
     return response.data as OpenOrder[];
   }
 
+  private calculateRSI(prices: number[], period = 14): number {
+    let gains = 0;
+    let losses = 0;
+
+    for (let i = 1; i < period + 1; i++) {
+      const difference = prices[i] - prices[i - 1];
+      if (difference >= 0) {
+        gains += difference;
+      } else {
+        losses -= difference;
+      }
+    }
+
+    const avgGain = gains / period;
+    const avgLoss = losses / period;
+    const rs = avgGain / avgLoss;
+    return 100 - 100 / (1 + rs);
+  }
+
+  private calculateMACD(prices: number[]): {
+    value: number;
+    signal: number;
+    histogram: number;
+  } {
+    const ema12 = this.calculateEMA(prices, 12);
+    const ema26 = this.calculateEMA(prices, 26);
+    const macdLine = ema12 - ema26;
+    const signalLine = this.calculateEMA([macdLine], 9);
+
+    return {
+      value: macdLine,
+      signal: signalLine,
+      histogram: macdLine - signalLine,
+    };
+  }
+
+  private calculateEMA(prices: number[], period: number): number {
+    const multiplier = 2 / (period + 1);
+    let ema = prices[0];
+
+    for (let i = 1; i < prices.length; i++) {
+      ema = (prices[i] - ema) * multiplier + ema;
+    }
+
+    return ema;
+  }
+
+  private findSupportResistance(candles: Candle[]): {
+    supports: number[];
+    resistances: number[];
+  } {
+    if (candles.length < 10) {
+      // Return current price as both support and resistance if not enough data
+      const currentPrice = candles[candles.length - 1]?.close || 0;
+      return {
+        supports: [currentPrice * 0.99], // 1% below current price
+        resistances: [currentPrice * 1.01], // 1% above current price
+      };
+    }
+
+    const pivots = candles.map((c) => ({
+      high: c.high,
+      low: c.low,
+      volume: c.volume,
+    }));
+
+    // Find local maxima and minima with volume confirmation
+    const supports: number[] = [];
+    const resistances: number[] = [];
+    const windowSize = 5;
+
+    for (let i = windowSize; i < pivots.length - windowSize; i++) {
+      const currentPivot = pivots[i];
+      const leftWindow = pivots.slice(i - windowSize, i);
+      const rightWindow = pivots.slice(i + 1, i + windowSize + 1);
+
+      // Check for resistance
+      if (
+        leftWindow.every((p) => p.high <= currentPivot.high) &&
+        rightWindow.every((p) => p.high <= currentPivot.high) &&
+        currentPivot.volume > pivots[i - 1].volume
+      ) {
+        resistances.push(currentPivot.high);
+      }
+
+      // Check for support
+      if (
+        leftWindow.every((p) => p.low >= currentPivot.low) &&
+        rightWindow.every((p) => p.low >= currentPivot.low) &&
+        currentPivot.volume > pivots[i - 1].volume
+      ) {
+        supports.push(currentPivot.low);
+      }
+    }
+
+    // If no levels found, use recent highs and lows
+    if (supports.length === 0) {
+      const recentLows = candles.slice(-20).map((c) => c.low);
+      supports.push(Math.min(...recentLows));
+    }
+
+    if (resistances.length === 0) {
+      const recentHighs = candles.slice(-20).map((c) => c.high);
+      resistances.push(Math.max(...recentHighs));
+    }
+
+    return {
+      supports: [...new Set(supports)].sort((a, b) => a - b),
+      resistances: [...new Set(resistances)].sort((a, b) => a - b),
+    };
+  }
+
+  private analyzeData(
+    data: {
+      px: string;
+      sz: string;
+    },
+    currentPrice: number,
+    candles: Candle[],
+  ): OrderAnalysis {
+    if (candles.length === 0) {
+      return {
+        deviation: 0,
+        rsi: 50,
+        macd: { value: 0, signal: 0, histogram: 0 },
+        nearestSupport: currentPrice * 0.99,
+        nearestResistance: currentPrice * 1.01,
+        recommendation: 'moderate',
+      };
+    }
+
+    const prices = candles.map((c) => c.close);
+    const rsi = this.calculateRSI(prices);
+    const macd = this.calculateMACD(prices);
+    const { supports, resistances } = this.findSupportResistance(candles);
+
+    const orderPrice = parseFloat(data.px);
+    const deviation = ((orderPrice - currentPrice) / currentPrice) * 100;
+
+    // Find nearest levels with default values
+    const nearestSupport =
+      supports.length > 0
+        ? supports.reduce(
+            (prev, curr) =>
+              Math.abs(curr - orderPrice) < Math.abs(prev - orderPrice)
+                ? curr
+                : prev,
+            supports[0],
+          )
+        : currentPrice * 0.99;
+
+    const nearestResistance =
+      resistances.length > 0
+        ? resistances.reduce(
+            (prev, curr) =>
+              Math.abs(curr - orderPrice) < Math.abs(prev - orderPrice)
+                ? curr
+                : prev,
+            resistances[0],
+          )
+        : currentPrice * 1.01;
+
+    // Analyze order strength
+    let recommendation: 'strong' | 'moderate' | 'weak' | 'risky' = 'moderate';
+
+    if (Number(data.sz) > 0) {
+      // Buy order
+      if (
+        rsi < 30 &&
+        macd.histogram > 0 &&
+        Math.abs(orderPrice - nearestSupport) < currentPrice * 0.01
+      ) {
+        recommendation = 'strong';
+      } else if (rsi > 70 || (deviation < -5 && macd.histogram < 0)) {
+        recommendation = 'risky';
+      }
+    } else {
+      // Sell order
+      if (
+        rsi > 70 &&
+        macd.histogram < 0 &&
+        Math.abs(orderPrice - nearestResistance) < currentPrice * 0.01
+      ) {
+        recommendation = 'strong';
+      } else if (rsi < 30 || (deviation > 5 && macd.histogram > 0)) {
+        recommendation = 'risky';
+      }
+    }
+
+    return {
+      deviation,
+      rsi,
+      macd,
+      nearestSupport,
+      nearestResistance,
+      recommendation,
+    };
+  }
+
+  private async getCachedCandles(
+    coin: string,
+    interval: string,
+    limit: number,
+  ): Promise<Candle[]> {
+    const cacheKey = `${coin}-${interval}-${limit}`;
+    const cached = this.candleCache.get(cacheKey);
+    const now = Date.now();
+
+    if (cached && now - cached.timestamp < this.CANDLE_CACHE_TTL) {
+      return cached.data;
+    }
+
+    const candles = await this.historicalDataService.getCandles(
+      coin,
+      interval,
+      limit,
+    );
+    this.candleCache.set(cacheKey, {
+      data: candles,
+      timestamp: now,
+    });
+
+    return candles;
+  }
+
   private async generateAnalysis(
     address: string,
     accountSummary: AccountSummary,
     trades: Trade[],
     openOrders: OpenOrder[],
   ): Promise<string> {
+    console.log('Generating analysis for trader:', address);
     const metrics = this.calculateTradingMetrics(trades);
 
     // Get unique coins from positions, trades, and orders
     const uniqueCoins = new Set([
       ...accountSummary.assetPositions.map((p) => p.position.coin),
-      ...trades.map((t) => t.coin),
       ...openOrders.map((o) => o.coin),
     ]);
 
     // Fetch current prices for all relevant coins
-    const prices = await this.getCurrentPrices(Array.from(uniqueCoins));
-    const positions = this.formatPositionData(accountSummary, prices);
+    const prices = await this.getCurrentPrices();
+    // const positions = this.formatPositionData(accountSummary, prices);
 
     // Get leaderboard data for this trader
     const trader = this.leaderboardService.getTraderByAddress(address);
@@ -354,6 +602,32 @@ export class TraderAnalysisService {
       };
     });
 
+    // Fetch candles for all coins at once
+    const uniqueCoinsArray = Array.from(uniqueCoins);
+    const candlesPromises = uniqueCoinsArray.map((coin) =>
+      this.getCachedCandles(coin, '15m', 100),
+    );
+    const allCandles = await Promise.all(candlesPromises);
+    const candlesByCoin = new Map(
+      uniqueCoinsArray.map((coin, i) => [coin, allCandles[i]]),
+    );
+
+    // Analyze each open order using cached candles
+    const orderAnalyses = await Promise.all(
+      openOrders.map((order) => {
+        const currentPrice = prices.get(order.coin.toUpperCase()) || 0;
+        const candles = candlesByCoin.get(order.coin) || [];
+        return this.analyzeData(
+          {
+            px: order.limitPx,
+            sz: order.sz,
+          },
+          currentPrice,
+          candles,
+        );
+      }),
+    );
+
     const prompt = `
       Analyze this trader's activity and risk management based on the following data:
 
@@ -364,9 +638,8 @@ export class TraderAnalysisService {
 
       Performance Summary:
       ${
-        performanceData
-          ? performanceData
-          : `
+        performanceData ??
+        `
       - Total Trades: ${metrics.totalTrades}
       - Win Rate: ${metrics.winRate.toFixed(2)}%
       - Total PnL: $${metrics.totalClosedPnL.toFixed(2)}
@@ -379,31 +652,62 @@ export class TraderAnalysisService {
       `
       }
 
-      Most Traded:
-      ${metrics.topTradedCoins
-        .map((c) => {
-          const currentPrice = prices.get(c.coin.toUpperCase()) || 0;
-          return `- ${c.coin}: $${c.volume.toFixed(2)} vol, ${c.trades} trades, $${c.pnl.toFixed(2)} PnL (Now: $${Number(currentPrice).toFixed(2)})`;
+      Active Positions Analysis:
+      ${accountSummary.assetPositions
+        .map((p) => {
+          const pos = p.position;
+          const currentPrice = Number(prices.get(pos.coin.toUpperCase()) || 0);
+          const candles = candlesByCoin.get(pos.coin) || [];
+          const analysis = this.analyzeData(
+            {
+              px: pos.entryPx,
+              sz: pos.szi,
+            },
+            currentPrice,
+            candles,
+          );
+
+          return `
+        ${pos.coin} (${Number(pos.szi) > 0 ? 'Long' : 'Short'}):
+        - Size: ${pos.szi} (${((parseFloat(pos.marginUsed) / parseFloat(accountSummary.marginSummary.accountValue)) * 100).toFixed(2)}% of account)
+        - Entry: $${Number(pos.entryPx).toFixed(2)} | Current: $${currentPrice.toFixed(2)} (${analysis.deviation >= 0 ? '+' : ''}${analysis.deviation.toFixed(2)}%)
+        - Leverage: ${pos.leverage.value}x ${pos.leverage.type}
+        - PnL: $${Number(pos.unrealizedPnl).toFixed(2)} (ROE: ${Number(pos.returnOnEquity).toFixed(2)}%)
+        - Technical Indicators:
+          * RSI: ${analysis.rsi.toFixed(2)} (${analysis.rsi > 70 ? 'Overbought' : analysis.rsi < 30 ? 'Oversold' : 'Neutral'})
+          * MACD: ${analysis.macd.histogram > 0 ? 'Bullish' : 'Bearish'} (${analysis.macd.histogram.toFixed(4)})
+        - Key Levels:
+          * Support: $${analysis.nearestSupport.toFixed(2)} (${(((analysis.nearestSupport - currentPrice) / currentPrice) * 100).toFixed(2)}% away)
+          * Resistance: $${analysis.nearestResistance.toFixed(2)} (${(((analysis.nearestResistance - currentPrice) / currentPrice) * 100).toFixed(2)}% away)
+          * Liquidation: $${Number(pos.liquidationPx).toFixed(2)} (${(((Number(pos.liquidationPx) - currentPrice) / currentPrice) * 100).toFixed(2)}% away)
+        - Position Status: ${analysis.recommendation.toUpperCase()}
+        `;
         })
         .join('\n')}
 
-      Current Positions:
-      ${positions}
-
-      Open Orders:
+      Pending Orders Analysis:
       ${openOrders
-        .map((o) => {
-          const currentPrice = prices.get(o.coin.toUpperCase()) || 0;
-          const deviation =
-            currentPrice > 0
-              ? ((parseFloat(o.limitPx) - currentPrice) / currentPrice) * 100
-              : 0;
-          return `- ${o.side === 'B' ? 'Buy' : 'Sell'} ${o.coin}: ${o.sz} @ $${Number(o.limitPx).toFixed(2)} (${deviation >= 0 ? '+' : ''}${deviation.toFixed(2)}% from current)`;
+        .map((o, i) => {
+          const analysis = orderAnalyses[i];
+          const currentPrice = Number(prices.get(o.coin.toUpperCase()) || 0);
+          return `
+        ${Number(o.sz) > 0 ? 'Buy' : 'Sell'} ${o.coin}:
+        - Size: ${o.sz} @ $${Number(o.limitPx).toFixed(2)} (${analysis.deviation >= 0 ? '+' : ''}${analysis.deviation.toFixed(2)}% from market)
+        - Market Context:
+          * Current Price: $${currentPrice.toFixed(2)}
+          * RSI: ${analysis.rsi.toFixed(2)} (${analysis.rsi > 70 ? 'Overbought' : analysis.rsi < 30 ? 'Oversold' : 'Neutral'})
+          * MACD Trend: ${analysis.macd.histogram > 0 ? 'Bullish' : 'Bearish'} (Strength: ${Math.abs(analysis.macd.histogram).toFixed(4)})
+        - Price Levels:
+          * Nearest Support: $${analysis.nearestSupport.toFixed(2)} (${(((analysis.nearestSupport - currentPrice) / currentPrice) * 100).toFixed(2)}% from current)
+          * Nearest Resistance: $${analysis.nearestResistance.toFixed(2)} (${(((analysis.nearestResistance - currentPrice) / currentPrice) * 100).toFixed(2)}% from current)
+        - Order Quality: ${analysis.recommendation.toUpperCase()}
+        `;
         })
         .join('\n')}
 
-      All Trades (sz=size, px=entry price, curr=current price, pnl=realized PnL, dir=direction, t=timestamp):
+      Recent Trading Activity:
       ${formattedTrades
+        .slice(0, 5)
         .map(
           (t) =>
             `${t.t} | ${t.dir} | sz:${t.sz} | px:${t.px} | curr:${t.curr} | pnl:${t.pnl}`,
@@ -412,15 +716,28 @@ export class TraderAnalysisService {
 
       Please analyze:
       1. Trading style and risk management
-      2. Position sizing and leverage usage
-      3. Performance trends across timeframes
-      4. Notable strengths and risks
-      5. Overall sophistication level
+      2. Performance trends across timeframes
+      3. Position management and risk exposure
+      4. Order placement strategy and technical timing
+      5. Risk/reward setup for current positions
+      6. Market positioning and directional bias
+      7. Notable strengths and risks
+      8. Overall trading sophistication
 
-      Keep it concise but informative.
+      Focus on technical analysis and risk management. Keep it concise but informative.
     `;
 
     const response = await this.llm.invoke(prompt);
     return response.content as string;
+  }
+
+  @Cron(CronExpression.EVERY_10_MINUTES)
+  private cleanupCandleCache(): void {
+    const now = Date.now();
+    for (const [key, value] of this.candleCache.entries()) {
+      if (now - value.timestamp > this.CANDLE_CACHE_TTL) {
+        this.candleCache.delete(key);
+      }
+    }
   }
 }

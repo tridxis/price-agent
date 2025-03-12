@@ -20,7 +20,7 @@ interface PriceData {
   volume?: number;
 }
 
-@Injectable()
+// @Injectable()
 export class PathRAGTool<T> {
   private root: PathNode<T> = { value: null, children: new Map() };
   private readonly maxHistorySize = 1000; // Keep last 1000 data points
