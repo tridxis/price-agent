@@ -36,9 +36,6 @@ export class PricePredictionService {
     const predictedChange = averageChange * (1 - volatility / 100);
     const prediction = currentPrice * (1 + predictedChange / 100);
 
-    console.log(prediction);
-    console.log(currentPrice);
-
     // Calculate confidence based on volatility
     const confidence = Math.max(0, Math.min(100, 100 - volatility));
 

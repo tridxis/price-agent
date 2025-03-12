@@ -77,7 +77,7 @@ export class CoinListService {
         });
       }
 
-      this.logger.debug('Updated coins:', this.coins);
+      // this.logger.debug('Updated coins:', this.coins);
       this.logger.log(`Updated coin list. Total coins: ${this.coins.size}`);
     } catch (error) {
       this.logger.error('Failed to update coin list:', error);

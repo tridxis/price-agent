@@ -10,6 +10,7 @@ export class TraderController {
   async analyzeTrader(
     @Param('address') address: string,
   ): Promise<TraderAnalysis> {
+    console.log('Analyzing trader:', address);
     return this.traderAnalysisService.analyzeTrader(address);
   }
 }

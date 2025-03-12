@@ -728,6 +728,9 @@ export class TraderAnalysisService {
     `;
 
     const response = await this.llm.invoke(prompt);
+
+    console.log(response.content);
+
     return response.content as string;
   }
 
