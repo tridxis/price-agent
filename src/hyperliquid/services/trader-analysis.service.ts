@@ -14,6 +14,11 @@ import { LeaderboardRow } from '../types/leaderboard.type';
 import { HistoricalDataService } from '../../shared/services/historical-data.service';
 import { Candle } from 'src/shared';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import {
+  TechnicalAnalysisUtil,
+  MACD,
+  SupportResistance,
+} from '../utils/technical-analysis.util';
 
 interface TradingMetrics {
   totalTrades: number;
@@ -333,118 +338,6 @@ export class TraderAnalysisService {
     return response.data as OpenOrder[];
   }
 
-  private calculateRSI(prices: number[], period = 14): number {
-    let gains = 0;
-    let losses = 0;
-
-    for (let i = 1; i < period + 1; i++) {
-      const difference = prices[i] - prices[i - 1];
-      if (difference >= 0) {
-        gains += difference;
-      } else {
-        losses -= difference;
-      }
-    }
-
-    const avgGain = gains / period;
-    const avgLoss = losses / period;
-    const rs = avgGain / avgLoss;
-    return 100 - 100 / (1 + rs);
-  }
-
-  private calculateMACD(prices: number[]): {
-    value: number;
-    signal: number;
-    histogram: number;
-  } {
-    const ema12 = this.calculateEMA(prices, 12);
-    const ema26 = this.calculateEMA(prices, 26);
-    const macdLine = ema12 - ema26;
-    const signalLine = this.calculateEMA([macdLine], 9);
-
-    return {
-      value: macdLine,
-      signal: signalLine,
-      histogram: macdLine - signalLine,
-    };
-  }
-
-  private calculateEMA(prices: number[], period: number): number {
-    const multiplier = 2 / (period + 1);
-    let ema = prices[0];
-
-    for (let i = 1; i < prices.length; i++) {
-      ema = (prices[i] - ema) * multiplier + ema;
-    }
-
-    return ema;
-  }
-
-  private findSupportResistance(candles: Candle[]): {
-    supports: number[];
-    resistances: number[];
-  } {
-    if (candles.length < 10) {
-      // Return current price as both support and resistance if not enough data
-      const currentPrice = candles[candles.length - 1]?.close || 0;
-      return {
-        supports: [currentPrice * 0.99], // 1% below current price
-        resistances: [currentPrice * 1.01], // 1% above current price
-      };
-    }
-
-    const pivots = candles.map((c) => ({
-      high: c.high,
-      low: c.low,
-      volume: c.volume,
-    }));
-
-    // Find local maxima and minima with volume confirmation
-    const supports: number[] = [];
-    const resistances: number[] = [];
-    const windowSize = 5;
-
-    for (let i = windowSize; i < pivots.length - windowSize; i++) {
-      const currentPivot = pivots[i];
-      const leftWindow = pivots.slice(i - windowSize, i);
-      const rightWindow = pivots.slice(i + 1, i + windowSize + 1);
-
-      // Check for resistance
-      if (
-        leftWindow.every((p) => p.high <= currentPivot.high) &&
-        rightWindow.every((p) => p.high <= currentPivot.high) &&
-        currentPivot.volume > pivots[i - 1].volume
-      ) {
-        resistances.push(currentPivot.high);
-      }
-
-      // Check for support
-      if (
-        leftWindow.every((p) => p.low >= currentPivot.low) &&
-        rightWindow.every((p) => p.low >= currentPivot.low) &&
-        currentPivot.volume > pivots[i - 1].volume
-      ) {
-        supports.push(currentPivot.low);
-      }
-    }
-
-    // If no levels found, use recent highs and lows
-    if (supports.length === 0) {
-      const recentLows = candles.slice(-20).map((c) => c.low);
-      supports.push(Math.min(...recentLows));
-    }
-
-    if (resistances.length === 0) {
-      const recentHighs = candles.slice(-20).map((c) => c.high);
-      resistances.push(Math.max(...recentHighs));
-    }
-
-    return {
-      supports: [...new Set(supports)].sort((a, b) => a - b),
-      resistances: [...new Set(resistances)].sort((a, b) => a - b),
-    };
-  }
-
   private analyzeData(
     data: {
       px: string;
@@ -465,9 +358,10 @@ export class TraderAnalysisService {
     }
 
     const prices = candles.map((c) => c.close);
-    const rsi = this.calculateRSI(prices);
-    const macd = this.calculateMACD(prices);
-    const { supports, resistances } = this.findSupportResistance(candles);
+    const rsi = TechnicalAnalysisUtil.calculateRSI(prices);
+    const macd = TechnicalAnalysisUtil.calculateMACD(prices);
+    const { supports, resistances } =
+      TechnicalAnalysisUtil.findSupportResistance(candles);
 
     const orderPrice = parseFloat(data.px);
     const deviation = ((orderPrice - currentPrice) / currentPrice) * 100;
@@ -495,30 +389,37 @@ export class TraderAnalysisService {
           )
         : currentPrice * 1.01;
 
-    // Analyze order strength
+    // Determine recommendation based on technical analysis
     let recommendation: 'strong' | 'moderate' | 'weak' | 'risky' = 'moderate';
 
+    // Check if price is near support/resistance
+    const nearSupport =
+      Math.abs(currentPrice - nearestSupport) / currentPrice < 0.02;
+    const nearResistance =
+      Math.abs(currentPrice - nearestResistance) / currentPrice < 0.02;
+
+    // Analyze order based on technical indicators
     if (Number(data.sz) > 0) {
       // Buy order
-      if (
-        rsi < 30 &&
-        macd.histogram > 0 &&
-        Math.abs(orderPrice - nearestSupport) < currentPrice * 0.01
-      ) {
+      if (rsi < 30 && macd.histogram > 0 && nearSupport) {
         recommendation = 'strong';
-      } else if (rsi > 70 || (deviation < -5 && macd.histogram < 0)) {
+      } else if (rsi > 70 || (nearResistance && macd.histogram < 0)) {
         recommendation = 'risky';
+      } else if (macd.histogram > 0) {
+        recommendation = 'moderate';
+      } else {
+        recommendation = 'weak';
       }
     } else {
       // Sell order
-      if (
-        rsi > 70 &&
-        macd.histogram < 0 &&
-        Math.abs(orderPrice - nearestResistance) < currentPrice * 0.01
-      ) {
+      if (rsi > 70 && macd.histogram < 0 && nearResistance) {
         recommendation = 'strong';
-      } else if (rsi < 30 || (deviation > 5 && macd.histogram > 0)) {
+      } else if (rsi < 30 || (nearSupport && macd.histogram > 0)) {
         recommendation = 'risky';
+      } else if (macd.histogram < 0) {
+        recommendation = 'moderate';
+      } else {
+        recommendation = 'weak';
       }
     }
 
