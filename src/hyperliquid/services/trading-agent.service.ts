@@ -179,6 +179,7 @@ export class TradingAgentService {
     market: MarketCondition,
   ): TradingSignal | null {
     try {
+      // console.log(market);
       const reasons: string[] = [];
       let confidence = 0;
 
@@ -186,16 +187,20 @@ export class TradingAgentService {
       const bb: BollingerBands =
         TechnicalAnalysisUtil.calculateBollingerBands(prices);
 
+      // console.log(bb);
+
       const ichimoku: IchimokuCloud =
         TechnicalAnalysisUtil.calculateIchimokuCloud(market.candles);
+      // console.log(ichimoku);
       const divergence = TechnicalAnalysisUtil.detectDivergence(
         prices,
         market.rsiValues,
       );
+      // console.log(divergence);
       const volumeTrend = TechnicalAnalysisUtil.detectVolumeTrend(
         market.candles,
       );
-
+      console.log(volumeTrend);
       if (!bb || !ichimoku || !divergence || !volumeTrend) {
         this.logger.warn(`Invalid technical analysis results for ${coin}`);
         return null;

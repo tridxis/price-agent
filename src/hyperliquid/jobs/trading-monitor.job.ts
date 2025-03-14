@@ -32,6 +32,7 @@ export class TradingMonitorJob {
       this.monitoredCoins = this.coinListService
         .getSupportedCoins()
         .map((coin) => coin.symbol.toUpperCase());
+      // this.monitoredCoins = ['SNX'];
       this.logger.log(`Initialized with ${this.monitoredCoins.length} coins`);
       void this.monitorTradingOpportunities();
     }, 10000);
@@ -51,26 +52,26 @@ export class TradingMonitorJob {
           `Processing batch ${i / this.BATCH_SIZE + 1}: ${batch.join(', ')}`,
         );
 
-        // Analyze current batch
-        const batchAnalyses = await Promise.all(
-          batch.map((coin) => this.analyzeWithRetry(coin)),
+        // Analyze and log each coin's signal immediately
+        await Promise.all(
+          batch.map(async (coin) => {
+            const signal = await this.analyzeWithRetry(coin);
+            if (signal) {
+              opportunities.push({
+                coin: signal.coin,
+                side: signal.side,
+                entryPrice: signal.entryPrice,
+                stopLoss: signal.stopLoss,
+                takeProfit: signal.takeProfit,
+                confidence: signal.confidence,
+                reasons: signal.reason,
+                timestamp: Date.now(),
+              });
+              // Log individual signal immediately
+              this.logSignal(signal);
+            }
+          }),
         );
-
-        // Add valid signals to opportunities
-        batchAnalyses.forEach((signal, index) => {
-          if (signal) {
-            opportunities.push({
-              coin: batch[index],
-              side: signal.side,
-              entryPrice: signal.entryPrice,
-              stopLoss: signal.stopLoss,
-              takeProfit: signal.takeProfit,
-              confidence: signal.confidence,
-              reasons: signal.reason,
-              timestamp: Date.now(),
-            });
-          }
-        });
 
         // Wait between batches to avoid rate limits
         if (i + this.BATCH_SIZE < this.monitoredCoins.length) {
@@ -78,8 +79,12 @@ export class TradingMonitorJob {
         }
       }
 
-      // Log findings
-      this.logOpportunities(opportunities);
+      // Log summary at the end
+      if (opportunities.length > 0) {
+        this.logSummary(opportunities);
+      } else {
+        this.logger.log('No trading opportunities found in this scan');
+      }
     } catch (error) {
       this.logger.error('Error monitoring trading opportunities:', error);
     }
@@ -113,39 +118,28 @@ export class TradingMonitorJob {
     return null;
   }
 
-  private logOpportunities(opportunities: TradingOpportunity[]) {
-    if (opportunities.length === 0) {
-      this.logger.log('No trading opportunities found in this scan');
-      return;
-    }
+  private logSignal(signal: TradingSignal) {
+    const riskReward = Math.abs(
+      (signal.takeProfit - signal.entryPrice) /
+        (signal.stopLoss - signal.entryPrice),
+    ).toFixed(4);
 
-    const summary = opportunities
-      .map((opp) => {
-        const riskReward = Math.abs(
-          (opp.takeProfit - opp.entryPrice) / (opp.stopLoss - opp.entryPrice),
-        ).toFixed(2);
-
-        return `
-${opp.coin} - ${opp.side.toUpperCase()} (${opp.confidence}% confidence)
-Entry: $${Number(opp.entryPrice).toFixed(2)} | SL: $${Number(opp.stopLoss).toFixed(2)} | TP: $${Number(opp.takeProfit).toFixed(2)}
+    this.logger.log(`
+Signal Found: ${signal.coin} - ${signal.side.toUpperCase()} (${signal.confidence}% confidence)
+Entry: $${Number(signal.entryPrice).toFixed(4)} | SL: $${Number(signal.stopLoss).toFixed(4)} | TP: $${Number(signal.takeProfit).toFixed(4)}
 R/R Ratio: ${riskReward}
-Reasons: ${opp.reasons.join(', ')}
-`;
-      })
-      .join('\n');
+Reasons: ${signal.reason.join(', ')}
+`);
+  }
 
-    this.logger.log(
-      `\nTrading Opportunities Found (${new Date().toISOString()}):\n${summary}`,
-    );
-
-    // Log high confidence opportunities separately
+  private logSummary(opportunities: TradingOpportunity[]) {
     const highConfidence = opportunities.filter((opp) => opp.confidence >= 75);
     if (highConfidence.length > 0) {
       this.logger.warn(
-        `\nHigh Confidence Signals (≥75%):\n${highConfidence
+        `\nHigh Confidence Signals Summary (≥75%):\n${highConfidence
           .map(
             (opp) =>
-              `${opp.coin}: ${opp.side.toUpperCase()} @ $${Number(opp.entryPrice).toFixed(2)}`,
+              `${opp.coin}: ${opp.side.toUpperCase()} @ $${Number(opp.entryPrice).toFixed(4)}`,
           )
           .join('\n')}`,
       );
