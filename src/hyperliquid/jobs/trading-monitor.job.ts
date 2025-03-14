@@ -127,7 +127,7 @@ export class TradingMonitorJob {
 
         return `
 ${opp.coin} - ${opp.side.toUpperCase()} (${opp.confidence}% confidence)
-Entry: $${opp.entryPrice.toFixed(2)} | SL: $${opp.stopLoss.toFixed(2)} | TP: $${opp.takeProfit.toFixed(2)}
+Entry: $${Number(opp.entryPrice).toFixed(2)} | SL: $${Number(opp.stopLoss).toFixed(2)} | TP: $${Number(opp.takeProfit).toFixed(2)}
 R/R Ratio: ${riskReward}
 Reasons: ${opp.reasons.join(', ')}
 `;
@@ -145,7 +145,7 @@ Reasons: ${opp.reasons.join(', ')}
         `\nHigh Confidence Signals (≥75%):\n${highConfidence
           .map(
             (opp) =>
-              `${opp.coin}: ${opp.side.toUpperCase()} @ $${opp.entryPrice.toFixed(2)}`,
+              `${opp.coin}: ${opp.side.toUpperCase()} @ $${Number(opp.entryPrice).toFixed(2)}`,
           )
           .join('\n')}`,
       );

@@ -6,6 +6,10 @@ import { HistoricalDataService } from '../../shared/services/historical-data.ser
 import { Candle } from '../../shared/types/candle.type';
 import { PriceTool } from '../../shared/tools/price.tool';
 import { TechnicalAnalysisUtil } from '../utils/technical-analysis.util';
+import {
+  BollingerBands,
+  IchimokuCloud,
+} from '../utils/technical-analysis.util';
 
 export interface TradingSignal {
   coin: string;
@@ -23,6 +27,7 @@ interface MarketCondition {
   volatility: 'high' | 'medium' | 'low';
   momentum: number;
   rsi: number;
+  rsiValues: number[];
   macd: {
     value: number;
     signal: number;
@@ -30,6 +35,7 @@ interface MarketCondition {
   };
   supports: number[];
   resistances: number[];
+  candles: Candle[];
 }
 
 @Injectable()
@@ -68,8 +74,14 @@ export class TradingAgentService {
     // Calculate momentum
     const momentum = (prices[prices.length - 1] - prices[0]) / prices[0];
 
-    // Calculate RSI
-    const rsi = TechnicalAnalysisUtil.calculateRSI(prices);
+    // Calculate RSI for each candle
+    const rsiValues = prices.map((_, i) => {
+      const priceSlice = prices.slice(0, i + 1);
+      return TechnicalAnalysisUtil.calculateRSI(priceSlice);
+    });
+
+    // Current RSI is the last value
+    const rsi = rsiValues[rsiValues.length - 1];
 
     // Calculate MACD
     const macd = TechnicalAnalysisUtil.calculateMACD(prices);
@@ -86,6 +98,8 @@ export class TradingAgentService {
       macd,
       supports,
       resistances,
+      candles,
+      rsiValues,
     };
   }
 
@@ -164,85 +178,181 @@ export class TradingAgentService {
     currentPrice: number,
     market: MarketCondition,
   ): TradingSignal | null {
-    const reasons: string[] = [];
-    let confidence = 0;
+    try {
+      const reasons: string[] = [];
+      let confidence = 0;
 
-    // Trend following strategy
-    if (market.trend === 'bullish') {
-      confidence += 20;
-      reasons.push('Bullish trend (EMA20 > EMA50)');
-    } else if (market.trend === 'bearish') {
-      confidence += 20;
-      reasons.push('Bearish trend (EMA20 < EMA50)');
+      const prices = market.candles.map((c) => c.close);
+      const bb: BollingerBands =
+        TechnicalAnalysisUtil.calculateBollingerBands(prices);
+
+      const ichimoku: IchimokuCloud =
+        TechnicalAnalysisUtil.calculateIchimokuCloud(market.candles);
+      const divergence = TechnicalAnalysisUtil.detectDivergence(
+        prices,
+        market.rsiValues,
+      );
+      const volumeTrend = TechnicalAnalysisUtil.detectVolumeTrend(
+        market.candles,
+      );
+
+      if (!bb || !ichimoku || !divergence || !volumeTrend) {
+        this.logger.warn(`Invalid technical analysis results for ${coin}`);
+        return null;
+      }
+
+      // Price near Bollinger Band extremes
+      if (currentPrice <= bb.lower) {
+        confidence += 15;
+        reasons.push('Price at/below lower Bollinger Band');
+      } else if (currentPrice >= bb.upper) {
+        confidence += 15;
+        reasons.push('Price at/above upper Bollinger Band');
+      }
+
+      // Ichimoku Cloud signals
+      if (
+        currentPrice > ichimoku.leadingSpanA &&
+        currentPrice > ichimoku.leadingSpanB
+      ) {
+        confidence += 10;
+        reasons.push('Price above Ichimoku Cloud');
+      } else if (
+        currentPrice < ichimoku.leadingSpanA &&
+        currentPrice < ichimoku.leadingSpanB
+      ) {
+        confidence += 10;
+        reasons.push('Price below Ichimoku Cloud');
+      }
+
+      // RSI Divergence
+      if (divergence.bullish) {
+        confidence += 20;
+        reasons.push('Bullish RSI divergence detected');
+      } else if (divergence.bearish) {
+        confidence += 20;
+        reasons.push('Bearish RSI divergence detected');
+      }
+
+      // Volume confirmation
+      if (volumeTrend === 'increasing') {
+        confidence += 15;
+        reasons.push('Increasing volume trend');
+      }
+
+      // Trend following strategy
+      if (market.trend === 'bullish') {
+        confidence += 20;
+        reasons.push('Bullish trend (EMA20 > EMA50)');
+      } else if (market.trend === 'bearish') {
+        confidence += 20;
+        reasons.push('Bearish trend (EMA20 < EMA50)');
+      }
+
+      // RSI conditions
+      if (market.rsi < 30) {
+        confidence += 15;
+        reasons.push('Oversold conditions (RSI < 30)');
+      } else if (market.rsi > 70) {
+        confidence += 15;
+        reasons.push('Overbought conditions (RSI > 70)');
+      }
+
+      // MACD signals
+      if (
+        market.macd.histogram > 0 &&
+        market.macd.histogram > market.macd.histogram
+      ) {
+        confidence += 15;
+        reasons.push('Positive MACD momentum');
+      } else if (
+        market.macd.histogram < 0 &&
+        market.macd.histogram < market.macd.histogram
+      ) {
+        confidence += 15;
+        reasons.push('Negative MACD momentum');
+      }
+
+      // Support/Resistance proximity
+      const nearestSupport = market.supports.reduce((prev, curr) =>
+        Math.abs(curr - currentPrice) < Math.abs(prev - currentPrice)
+          ? curr
+          : prev,
+      );
+      const nearestResistance = market.resistances.reduce((prev, curr) =>
+        Math.abs(curr - currentPrice) < Math.abs(prev - currentPrice)
+          ? curr
+          : prev,
+      );
+
+      const supportDistance = (currentPrice - nearestSupport) / currentPrice;
+      const resistanceDistance =
+        (nearestResistance - currentPrice) / currentPrice;
+
+      console.log(coin, confidence, reasons);
+
+      // Generate signal only if confidence is high enough
+      if (confidence >= 60) {
+        const side = this.determineTradeSide(
+          market,
+          bb,
+          ichimoku,
+          divergence,
+          volumeTrend,
+        );
+        const stopDistance =
+          side === 'long' ? supportDistance : resistanceDistance;
+        const profitDistance = stopDistance * 2; // 2:1 reward-to-risk ratio
+
+        return {
+          coin,
+          side,
+          size: 1.0, // Base position size
+          entryPrice: currentPrice,
+          stopLoss:
+            side === 'long'
+              ? currentPrice * (1 - stopDistance)
+              : currentPrice * (1 + stopDistance),
+          takeProfit:
+            side === 'long'
+              ? currentPrice * (1 + profitDistance)
+              : currentPrice * (1 - profitDistance),
+          confidence,
+          reason: reasons,
+        };
+      }
+
+      return null;
+    } catch (error) {
+      this.logger.error(`Error generating trading signal for ${coin}:`, error);
+      return null;
     }
+  }
 
-    // RSI conditions
-    if (market.rsi < 30) {
-      confidence += 15;
-      reasons.push('Oversold conditions (RSI < 30)');
-    } else if (market.rsi > 70) {
-      confidence += 15;
-      reasons.push('Overbought conditions (RSI > 70)');
-    }
+  private determineTradeSide(
+    market: MarketCondition,
+    bb: BollingerBands,
+    ichimoku: IchimokuCloud,
+    divergence: { bullish: boolean; bearish: boolean },
+    volumeTrend: string,
+  ): 'long' | 'short' {
+    let bullishSignals = 0;
+    let bearishSignals = 0;
 
-    // MACD signals
-    if (
-      market.macd.histogram > 0 &&
-      market.macd.histogram > market.macd.histogram
-    ) {
-      confidence += 15;
-      reasons.push('Positive MACD momentum');
-    } else if (
-      market.macd.histogram < 0 &&
-      market.macd.histogram < market.macd.histogram
-    ) {
-      confidence += 15;
-      reasons.push('Negative MACD momentum');
-    }
+    // Count bullish signals
+    if (market.trend === 'bullish') bullishSignals += 2;
+    if (divergence.bullish) bullishSignals += 2;
+    if (market.rsi < 30) bullishSignals++;
+    if (market.macd.histogram > 0) bullishSignals++;
+    if (volumeTrend === 'increasing') bullishSignals++;
 
-    // Support/Resistance proximity
-    const nearestSupport = market.supports.reduce((prev, curr) =>
-      Math.abs(curr - currentPrice) < Math.abs(prev - currentPrice)
-        ? curr
-        : prev,
-    );
-    const nearestResistance = market.resistances.reduce((prev, curr) =>
-      Math.abs(curr - currentPrice) < Math.abs(prev - currentPrice)
-        ? curr
-        : prev,
-    );
+    // Count bearish signals
+    if (market.trend === 'bearish') bearishSignals += 2;
+    if (divergence.bearish) bearishSignals += 2;
+    if (market.rsi > 70) bearishSignals++;
+    if (market.macd.histogram < 0) bearishSignals++;
+    if (volumeTrend === 'decreasing') bearishSignals++;
 
-    const supportDistance = (currentPrice - nearestSupport) / currentPrice;
-    const resistanceDistance =
-      (nearestResistance - currentPrice) / currentPrice;
-
-    console.log(coin, confidence, reasons);
-
-    // Generate signal only if confidence is high enough
-    if (confidence >= 50) {
-      const side = market.trend === 'bullish' ? 'long' : 'short';
-      const stopDistance =
-        side === 'long' ? supportDistance : resistanceDistance;
-      const profitDistance = stopDistance * 2; // 2:1 reward-to-risk ratio
-
-      return {
-        coin,
-        side,
-        size: 1.0, // Base position size
-        entryPrice: currentPrice,
-        stopLoss:
-          side === 'long'
-            ? currentPrice * (1 - stopDistance)
-            : currentPrice * (1 + stopDistance),
-        takeProfit:
-          side === 'long'
-            ? currentPrice * (1 + profitDistance)
-            : currentPrice * (1 - profitDistance),
-        confidence,
-        reason: reasons,
-      };
-    }
-
-    return null;
+    return bullishSignals > bearishSignals ? 'long' : 'short';
   }
 }

@@ -6,6 +6,21 @@ export interface MACD {
   histogram: number;
 }
 
+export interface BollingerBands {
+  upper: number;
+  middle: number;
+  lower: number;
+  bandwidth: number;
+}
+
+export interface IchimokuCloud {
+  conversionLine: number; // Tenkan-sen
+  baseLine: number; // Kijun-sen
+  leadingSpanA: number; // Senkou Span A
+  leadingSpanB: number; // Senkou Span B
+  laggingSpan: number; // Chikou Span
+}
+
 export interface SupportResistance {
   supports: number[];
   resistances: number[];
@@ -152,5 +167,114 @@ export class TechnicalAnalysisUtil {
       supports: [...new Set(supports)].sort((a, b) => a - b),
       resistances: [...new Set(resistances)].sort((a, b) => a - b),
     };
+  }
+
+  static calculateBollingerBands(
+    prices: number[],
+    period = 20,
+    multiplier = 2,
+  ): BollingerBands {
+    if (prices.length < period) {
+      return {
+        upper: prices[prices.length - 1] || 0,
+        middle: prices[prices.length - 1] || 0,
+        lower: prices[prices.length - 1] || 0,
+        bandwidth: 0,
+      };
+    }
+
+    const sma = prices.slice(-period).reduce((a, b) => a + b) / period;
+    const squaredDiffs = prices
+      .slice(-period)
+      .map((price) => Math.pow(price - sma, 2));
+    const standardDeviation = Math.sqrt(
+      squaredDiffs.reduce((a, b) => a + b) / period,
+    );
+
+    const upper = sma + multiplier * standardDeviation;
+    const lower = sma - multiplier * standardDeviation;
+    const bandwidth = (upper - lower) / sma;
+
+    return { upper, middle: sma, lower, bandwidth };
+  }
+
+  static calculateIchimokuCloud(candles: Candle[]): IchimokuCloud {
+    const highs = candles.map((c) => c.high);
+    const lows = candles.map((c) => c.low);
+    const closes = candles.map((c) => c.close);
+
+    // Conversion Line (Tenkan-sen) - 9-period high/low average
+    const conversionLine = this.calculateIchimokuLine(highs, lows, 9);
+
+    // Base Line (Kijun-sen) - 26-period high/low average
+    const baseLine = this.calculateIchimokuLine(highs, lows, 26);
+
+    // Leading Span A (Senkou Span A) - Average of conversion & base lines
+    const leadingSpanA = (conversionLine + baseLine) / 2;
+
+    // Leading Span B (Senkou Span B) - 52-period high/low average
+    const leadingSpanB = this.calculateIchimokuLine(highs, lows, 52);
+
+    // Lagging Span (Chikou Span) - Current closing price shifted back 26 periods
+    const laggingSpan = closes[closes.length - 26] || closes[closes.length - 1];
+
+    return {
+      conversionLine,
+      baseLine,
+      leadingSpanA,
+      leadingSpanB,
+      laggingSpan,
+    };
+  }
+
+  private static calculateIchimokuLine(
+    highs: number[],
+    lows: number[],
+    period: number,
+  ): number {
+    const periodHighs = highs.slice(-period);
+    const periodLows = lows.slice(-period);
+    return (Math.max(...periodHighs) + Math.min(...periodLows)) / 2;
+  }
+
+  static detectDivergence(
+    prices: number[],
+    rsi: number[],
+    lookback = 10,
+  ): {
+    bullish: boolean;
+    bearish: boolean;
+  } {
+    const recentPrices = prices.slice(-lookback);
+    const recentRSI = rsi.slice(-lookback);
+
+    const priceMin = Math.min(...recentPrices);
+    const priceMax = Math.max(...recentPrices);
+    const rsiMin = Math.min(...recentRSI);
+    const rsiMax = Math.max(...recentRSI);
+
+    // Bullish divergence: Price making lower lows but RSI making higher lows
+    const bullish =
+      prices[prices.length - 1] <= priceMin && rsi[rsi.length - 1] > rsiMin;
+
+    // Bearish divergence: Price making higher highs but RSI making lower highs
+    const bearish =
+      prices[prices.length - 1] >= priceMax && rsi[rsi.length - 1] < rsiMax;
+
+    return { bullish, bearish };
+  }
+
+  static detectVolumeTrend(
+    candles: Candle[],
+    period = 20,
+  ): 'increasing' | 'decreasing' | 'neutral' {
+    const volumes = candles.map((c) => c.volume);
+    const recentVolumes = volumes.slice(-period);
+    const volumeSMA = recentVolumes.reduce((a, b) => a + b) / period;
+    const currentVolume = volumes[volumes.length - 1];
+
+    if (currentVolume > volumeSMA * 1.5) return 'increasing';
+    if (currentVolume < volumeSMA * 0.5) return 'decreasing';
+    return 'neutral';
   }
 }
