@@ -34,13 +34,15 @@ export class TradingMonitorJob {
         .map((coin) => coin.symbol.toUpperCase());
       // this.monitoredCoins = ['SNX'];
       this.logger.log(`Initialized with ${this.monitoredCoins.length} coins`);
-      void this.monitorTradingOpportunities();
+      void this.monitorTradingOpportunities('Scalping');
     }, 10000);
   }
 
   @Cron('*/15 * * * *')
-  async monitorTradingOpportunities() {
-    this.logger.log('Scanning for trading opportunities...');
+  async monitorTradingOpportunities(
+    style?: 'Scalping' | 'Day Trading' | 'Swing Trading' | 'Position Trading',
+  ) {
+    this.logger.log(`Scanning for ${style || 'all'} trading opportunities...`);
 
     try {
       const opportunities: TradingOpportunity[] = [];
@@ -52,10 +54,9 @@ export class TradingMonitorJob {
           `Processing batch ${i / this.BATCH_SIZE + 1}: ${batch.join(', ')}`,
         );
 
-        // Analyze and log each coin's signal immediately
         await Promise.all(
           batch.map(async (coin) => {
-            const signal = await this.analyzeWithRetry(coin);
+            const signal = await this.analyzeWithRetry(coin, style);
             if (signal) {
               opportunities.push({
                 coin: signal.coin,
@@ -67,23 +68,24 @@ export class TradingMonitorJob {
                 reasons: signal.reason,
                 timestamp: Date.now(),
               });
-              // Log individual signal immediately
               this.logSignal(signal);
             }
           }),
         );
 
-        // Wait between batches to avoid rate limits
+        // Wait between batches
         if (i + this.BATCH_SIZE < this.monitoredCoins.length) {
           await new Promise((resolve) => setTimeout(resolve, this.BATCH_DELAY));
         }
       }
 
-      // Log summary at the end
+      // Log summary
       if (opportunities.length > 0) {
         this.logSummary(opportunities);
       } else {
-        this.logger.log('No trading opportunities found in this scan');
+        this.logger.log(
+          `No ${style || ''} trading opportunities found in this scan`,
+        );
       }
     } catch (error) {
       this.logger.error('Error monitoring trading opportunities:', error);
@@ -92,12 +94,16 @@ export class TradingMonitorJob {
 
   private async analyzeWithRetry(
     coin: string,
+    style?: 'Scalping' | 'Day Trading' | 'Swing Trading' | 'Position Trading',
     maxRetries = 3,
     delay = 2000,
   ): Promise<TradingSignal | null> {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        return await this.tradingAgentService.analyzeTradeOpportunity(coin);
+        return await this.tradingAgentService.analyzeTradeOpportunity(
+          coin,
+          style,
+        );
       } catch (error: any) {
         if (error.response?.status === 429) {
           this.logger.warn(
@@ -106,7 +112,6 @@ export class TradingMonitorJob {
             }s...`,
           );
           await new Promise((resolve) => setTimeout(resolve, delay));
-          // Increase delay for next retry
           delay *= 2;
         } else {
           this.logger.error(`Error analyzing ${coin}:`, error);
