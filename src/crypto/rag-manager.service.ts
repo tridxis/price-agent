@@ -6,7 +6,6 @@ import { CoinListService } from '../shared/services/coin-list.service';
 import { TechnicalAnalysisService } from './technical-analysis.service';
 import { TechnicalTerm } from './utils/price-query.parser';
 import { TimeframedPriceData } from '../shared/types/price.type';
-import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class RAGManagerService {

@@ -68,16 +68,16 @@ export class HistoricalDataService {
     limit: number,
     retryCount = 0,
   ): Promise<Candle[]> {
-    const maxRetries = 3;
+    const maxRetries = 1;
     const retryDelay = 2000; // 2 seconds
 
     try {
       const endTime = Date.now();
       const startTime = endTime - limit * this.getIntervalMs(interval);
 
-      this.logger.debug(
-        `Fetching candles for ${symbol} (attempt ${retryCount + 1}/${maxRetries + 1})`,
-      );
+      // this.logger.debug(
+      //   `Fetching candles for ${symbol} (attempt ${retryCount + 1}/${maxRetries + 1})`,
+      // );
 
       const { data } = await firstValueFrom(
         this.httpService.post<CandleResponse[]>(
@@ -100,9 +100,9 @@ export class HistoricalDataService {
       return data.map((response) => this.mapResponseToCandle(response));
     } catch (error) {
       if (retryCount < maxRetries) {
-        this.logger.warn(
-          `Retrying candle fetch for ${symbol} (${retryCount + 1}/${maxRetries})`,
-        );
+        // this.logger.warn(
+        //   `Retrying candle fetch for ${symbol} (${retryCount + 1}/${maxRetries})`,
+        // );
         await new Promise((resolve) => setTimeout(resolve, retryDelay));
         return this.fetchCandlesWithRetry(
           symbol,

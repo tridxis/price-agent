@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { HttpModule } from '@nestjs/axios';
+import { HttpModule, HttpService } from '@nestjs/axios';
 import {
   CoinListService,
   CacheService,
@@ -15,20 +15,30 @@ import { PriceTool, FundingTool, PathRAGTool } from './tools';
     }),
   ],
   providers: [
-    CoinListService,
     CacheService,
+    CoinListService,
     HistoricalDataService,
-    PriceTool,
-    FundingTool,
-    PathRAGTool,
+    {
+      provide: PriceTool,
+      useFactory: (httpService: HttpService, cacheService: CacheService) => {
+        return new PriceTool(httpService, cacheService);
+      },
+      inject: [HttpService, CacheService],
+    },
+    {
+      provide: FundingTool,
+      useFactory: (httpService: HttpService, cacheService: CacheService) => {
+        return new FundingTool(httpService, cacheService);
+      },
+      inject: [HttpService, CacheService],
+    },
   ],
   exports: [
-    CoinListService,
     CacheService,
+    CoinListService,
     HistoricalDataService,
     PriceTool,
     FundingTool,
-    PathRAGTool,
   ],
 })
 export class SharedModule {}

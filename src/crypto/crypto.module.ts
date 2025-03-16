@@ -11,14 +11,7 @@ import { TechnicalAnalysisService } from './technical-analysis.service';
 import { PricePredictionService } from './price-prediction.service';
 
 @Module({
-  imports: [
-    SharedModule,
-    ScheduleModule.forRoot(),
-    HttpModule.register({
-      timeout: 5000,
-      maxRedirects: 5,
-    }),
-  ],
+  imports: [HttpModule, SharedModule, ScheduleModule.forRoot()],
   controllers: [CryptoController],
   providers: [
     CryptoService,
@@ -28,5 +21,6 @@ import { PricePredictionService } from './price-prediction.service';
     TechnicalAnalysisService,
     PricePredictionService,
   ],
+  exports: [CryptoSupervisor],
 })
 export class CryptoModule {}

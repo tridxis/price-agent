@@ -1,15 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
-import { ConfigService } from '@nestjs/config';
 import { firstValueFrom } from 'rxjs';
 import { HistoricalDataService } from '../../shared/services/historical-data.service';
 import { Candle } from '../../shared/types/candle.type';
-import { PriceTool } from '../../shared/tools/price.tool';
 import { TechnicalAnalysisUtil } from '../utils/technical-analysis.util';
-import {
-  BollingerBands,
-  IchimokuCloud,
-} from '../utils/technical-analysis.util';
 
 export interface TradingSignal {
   coin: string;
@@ -58,9 +52,7 @@ export class TradingAgentService {
 
   constructor(
     private readonly httpService: HttpService,
-    private readonly configService: ConfigService,
     private readonly historicalDataService: HistoricalDataService,
-    private readonly priceTool: PriceTool,
   ) {}
 
   private calculateMarketCondition(candles: Candle[]): MarketCondition {
@@ -520,10 +512,10 @@ export class TradingAgentService {
     try {
       const [candles3m, candles15m, candles1h, candles4h, currentPrice] =
         await Promise.all([
-          this.historicalDataService.getCandles(coin, '3m', 100),
-          this.historicalDataService.getCandles(coin, '15m', 100),
-          this.historicalDataService.getCandles(coin, '1h', 100),
-          this.historicalDataService.getCandles(coin, '4h', 100),
+          this.historicalDataService.getCandles(coin, '3m', 150),
+          this.historicalDataService.getCandles(coin, '15m', 150),
+          this.historicalDataService.getCandles(coin, '1h', 150),
+          this.historicalDataService.getCandles(coin, '4h', 150),
           this.getCurrentPrice(coin),
         ]);
 

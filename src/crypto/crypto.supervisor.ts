@@ -2,9 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PriceTool } from '../shared/tools/price.tool';
 import { FundingTool } from '../shared/tools/funding.tool';
 import { CacheService } from '../shared/services/cache.service';
-import { CoinListService } from '../shared/services/coin-list.service';
 import { PriceData } from '../shared/types/price.type';
 import { FundingData } from '../shared/types/funding.type';
+import { HttpService } from '@nestjs/axios';
 
 @Injectable()
 export class CryptoSupervisor {
@@ -14,12 +14,17 @@ export class CryptoSupervisor {
   private lastBatchUpdate = 0;
   private readonly BATCH_COOLDOWN = 30000; // 30 seconds cooldown
 
+  private readonly priceTool: PriceTool;
+  private readonly fundingTool: FundingTool;
+
   constructor(
-    private readonly priceTool: PriceTool,
-    private readonly fundingTool: FundingTool,
+    private readonly httpService: HttpService,
     private readonly cacheService: CacheService,
-    private readonly coinListService: CoinListService,
-  ) {}
+  ) {
+    // Initialize tools manually
+    this.priceTool = new PriceTool(httpService, cacheService);
+    this.fundingTool = new FundingTool(httpService, cacheService);
+  }
 
   async batchUpdateData(symbols: string[]): Promise<void> {
     if (

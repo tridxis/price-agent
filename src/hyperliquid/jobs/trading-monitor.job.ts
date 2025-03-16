@@ -34,7 +34,7 @@ export class TradingMonitorJob {
         .map((coin) => coin.symbol.toUpperCase());
       // this.monitoredCoins = ['SNX'];
       this.logger.log(`Initialized with ${this.monitoredCoins.length} coins`);
-      void this.monitorTradingOpportunities('Scalping');
+      void this.monitorTradingOpportunities('Day Trading');
     }, 10000);
   }
 

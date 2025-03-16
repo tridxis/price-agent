@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Logger, OnModuleInit } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { CacheService } from '../services/cache.service';
@@ -14,7 +14,6 @@ type HyperliquidResponse = [
   [string, { fundingRate: string; nextFundingTime: number }][],
 ][];
 
-// @Injectable()
 export class FundingTool implements OnModuleInit {
   private readonly logger = new Logger(FundingTool.name);
   private readonly HYPERLIQUID_API = 'https://api-ui.hyperliquid.xyz/info';
