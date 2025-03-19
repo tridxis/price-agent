@@ -1,120 +1,94 @@
-# Crypto Price Agent
+# Price Agent
 
-A NestJS-based service that provides real-time cryptocurrency price information, technical analysis, and price predictions using natural language processing.
+A NestJS application for cryptocurrency market analysis and trading signals.
+
+## Overview
+
+Price Agent is a sophisticated platform that provides real-time cryptocurrency market data, technical analysis, and automated trading signals. It integrates with multiple exchanges to gather price data, funding rates, and historical information to generate actionable insights.
 
 ## Features
 
-- Real-time cryptocurrency price data from multiple exchanges
-- Natural language processing for crypto queries
-- Technical analysis indicators (RSI, Moving Averages, Support/Resistance)
-- Price predictions using historical data
-- Funding rate information for perpetual contracts
-- Caching system for optimal performance
-- Rate-limited API requests
-- Docker support with BERT service integration
+- **Real-time Market Data**: Collects and aggregates price data from Binance, Bybit, OKX, and Hyperliquid
+- **Technical Analysis**: Implements various indicators including RSI, MACD, Bollinger Bands, and Ichimoku Cloud
+- **Trading Signals**: Generates trading opportunities based on multiple timeframes and strategies
+- **Trader Analysis**: Analyzes professional traders' activities and performance
+- **Leaderboard Tracking**: Monitors top performers on Hyperliquid
 
-## Prerequisites
+## Trading Strategies
 
-- Node.js (v18 or higher)
-- pnpm
-- Docker and Docker Compose (for BERT service)
-- Python 3.9+ (for BERT service development)
+The system supports multiple trading styles:
 
-## Environment Variables
+- **Scalping**: Ultra-short term trades using 3m candles with 15m confirmation
+- **Day Trading**: Intraday trades using 15m and 1h timeframes
+- **Swing Trading**: Multi-day positions using 1h and 4h timeframes
+- **Position Trading**: Longer-term positions using 4h timeframes
 
-Create a `.env` file in the root directory:
+## Technical Stack
 
-```env
-OPENAI_API_KEY=your_openai_api_key
-BERT_API_URL=http://localhost:8000
-HUGGINGFACE_API_KEY=your_huggingface_api_key
-```
+- **Backend**: NestJS with TypeScript
+- **Data Processing**: Custom technical analysis utilities
+- **API Integration**: Multiple exchange APIs
+- **Scheduling**: Cron jobs for regular data updates and signal generation
 
-## Installation
+## Getting Started
 
-```bash
-# Install dependencies
-pnpm install
+### Prerequisites
 
-# Start the BERT service and API
-docker-compose up -d
+- Node.js (v16+)
+- npm or yarn
+- API keys for supported exchanges (optional)
 
-# Start the development server
-pnpm run start:dev
-```
+### Installation
 
-## API Usage
-
-### Query Endpoint
-
-```http
-POST /crypto/query
-Content-Type: application/json
-
-{
-  "question": "What is the ETH price?"
-}
-```
-
-Example questions:
-
-- "What is the BTC price?"
-- "Show me ETH funding rate"
-- "What's the trend for BTC?"
-- "Predict ETH price next day"
-- "What's the RSI for BTC?"
-
-## Project Structure
-
-```
-src/
-├── shared/           # Shared services and tools
-│   ├── services/     # Common services (cache, historical data, etc.)
-│   ├── tools/        # Utility tools (price, funding, RAG)
-│   └── types/        # Shared type definitions
-├── crypto/           # Crypto module
-│   ├── tools/        # Crypto-specific tools (NLP, analysis)
-│   └── services/     # Crypto-specific services
-└── bert-service/     # Python BERT service for NLP
-```
-
-## Development
+1. Clone the repository:
 
 ```bash
-# Run tests
-pnpm run test
-
-# Run e2e tests
-pnpm run test:e2e
-
-# Run linter
-pnpm run lint
-
-# Build for production
-pnpm run build
+git clone https://github.com/yourusername/price-agent.git
+cd price-agent
 ```
 
-## Docker Deployment
+2. Install dependencies:
 
 ```bash
-# Build and start all services
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
+npm install
 ```
 
-## Contributing
+3. Create a `.env` file with your API keys:
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+```
+OPENAI_API_KEY=your_openai_key
+HUGGINGFACE_API_KEY=your_huggingface_key
+COINMARKETCAP_API_KEY=your_coinmarketcap_key
+```
+
+4. Start the application:
+
+```bash
+npm run start:dev
+```
+
+## Usage
+
+### Trading Monitor
+
+The trading monitor automatically scans for trading opportunities based on configured strategies:
+
+```typescript
+// Run a specific trading style
+tradingMonitorJob.monitorTradingOpportunities('Scalping');
+
+// Run all trading styles
+tradingMonitorJob.monitorTradingOpportunities();
+```
+
+### Trader Analysis
+
+Analyze professional traders' activities:
+
+```
+GET /trader/:address
+```
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+[MIT License](LICENSE)

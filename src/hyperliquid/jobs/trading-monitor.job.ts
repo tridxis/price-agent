@@ -38,7 +38,7 @@ export class TradingMonitorJob {
     }, 10000);
   }
 
-  @Cron('*/15 * * * *')
+  @Cron('*/5 * * * *')
   async monitorTradingOpportunities(
     style?: 'Scalping' | 'Day Trading' | 'Swing Trading' | 'Position Trading',
   ) {
