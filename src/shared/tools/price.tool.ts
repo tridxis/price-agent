@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Logger, OnModuleInit } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { CacheService } from '../services/cache.service';
@@ -9,7 +9,6 @@ interface HyperliquidResponse {
   [key: string]: number;
 }
 
-// @Injectable()
 export class PriceTool implements OnModuleInit {
   private readonly logger = new Logger(PriceTool.name);
   private readonly BINANCE_API = 'https://fapi.binance.com/fapi/v1';
