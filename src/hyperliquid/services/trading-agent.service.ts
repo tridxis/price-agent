@@ -4,6 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { HistoricalDataService } from '../../shared/services/historical-data.service';
 import { Candle } from '../../shared/types/candle.type';
 import { TechnicalAnalysisUtil } from '../utils/technical-analysis.util';
+import { PairFormatHelper } from 'src/shared/helper/pair-format.helper';
 
 export interface TradingSignal {
   coin: string;
@@ -611,10 +612,11 @@ export class TradingAgentService {
         this.cachedPrices = await this.getCurrentPrices();
         this.lastPriceUpdate = Date.now();
       }
+      const formattedCoin = await PairFormatHelper.formatPair(coin);
 
-      const price = this.cachedPrices.get(coin);
+      const price = this.cachedPrices.get(formattedCoin);
       if (!price) {
-        this.logger.warn(`No price found for ${coin}`);
+        this.logger.warn(`No price found for ${formattedCoin}`);
         return null;
       }
 

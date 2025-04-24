@@ -43,7 +43,7 @@ The system supports multiple trading styles:
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/price-agent.git
+git clone https://github.com/tridxis/price-agent.git
 cd price-agent
 ```
 
