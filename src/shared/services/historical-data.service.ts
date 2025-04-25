@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { HttpService } from '@nestjs/axios';
 import { firstValueFrom } from 'rxjs';
 import { Candle, CandleResponse } from '../types/candle.type';
+import { PairFormatHelper } from '../helper/pair-format.helper';
 
 @Injectable()
 export class HistoricalDataService {
@@ -22,8 +23,10 @@ export class HistoricalDataService {
     return new Promise((resolve) => {
       this.requestQueue.push(async () => {
         try {
+          const symbolFormatted = await PairFormatHelper.formatPair(symbol)
+          
           const candles = await this.fetchCandlesWithRetry(
-            symbol,
+            symbolFormatted,
             interval,
             limit,
           );
@@ -85,7 +88,7 @@ export class HistoricalDataService {
           {
             type: 'candleSnapshot',
             req: {
-              coin: symbol.toUpperCase(),
+              coin: symbol,
               interval,
               startTime,
               endTime,
